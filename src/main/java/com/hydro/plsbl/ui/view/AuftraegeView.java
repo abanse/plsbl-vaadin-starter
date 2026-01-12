@@ -2,15 +2,20 @@ package com.hydro.plsbl.ui.view;
 
 import com.hydro.plsbl.dto.CraneCommandDTO;
 import com.hydro.plsbl.dto.TransportOrderDTO;
+import com.hydro.plsbl.entity.enums.OrderStatus;
 import com.hydro.plsbl.service.CraneCommandService;
 import com.hydro.plsbl.service.IngotService;
 import com.hydro.plsbl.service.StockyardService;
+import com.hydro.plsbl.service.TransportOrderProcessor;
 import com.hydro.plsbl.service.TransportOrderService;
 import com.hydro.plsbl.ui.MainLayout;
 import com.hydro.plsbl.ui.dialog.CraneCommandDetailDialog;
 import com.hydro.plsbl.ui.dialog.CraneCommandEditDialog;
 import com.hydro.plsbl.ui.dialog.TransportOrderDetailDialog;
 import com.hydro.plsbl.ui.dialog.TransportOrderEditDialog;
+import com.vaadin.flow.component.AttachEvent;
+import com.vaadin.flow.component.DetachEvent;
+import com.vaadin.flow.component.UI;
 import com.vaadin.flow.component.button.Button;
 import com.vaadin.flow.component.button.ButtonVariant;
 import com.vaadin.flow.component.grid.Grid;
@@ -18,6 +23,8 @@ import com.vaadin.flow.component.grid.GridVariant;
 import com.vaadin.flow.component.html.H3;
 import com.vaadin.flow.component.html.Span;
 import com.vaadin.flow.component.icon.VaadinIcon;
+import com.vaadin.flow.component.notification.Notification;
+import com.vaadin.flow.component.notification.NotificationVariant;
 import com.vaadin.flow.component.orderedlayout.HorizontalLayout;
 import com.vaadin.flow.component.orderedlayout.VerticalLayout;
 import com.vaadin.flow.component.tabs.Tab;
@@ -28,6 +35,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.List;
+import java.util.function.Consumer;
 
 /**
  * Aufträge-Ansicht - Kran-Kommandos und Transportaufträge
@@ -40,6 +48,7 @@ public class AuftraegeView extends VerticalLayout {
 
     private final CraneCommandService craneCommandService;
     private final TransportOrderService transportOrderService;
+    private final TransportOrderProcessor orderProcessor;
     private final IngotService ingotService;
     private final StockyardService stockyardService;
 
@@ -51,10 +60,22 @@ public class AuftraegeView extends VerticalLayout {
     private Span commandCountLabel;
     private Span orderCountLabel;
 
+    // Auto-Processing UI
+    private Button autoProcessButton;
+    private Button abortButton;
+    private Span processingStatusLabel;
+    private Span currentOrderLabel;
+
+    // Listeners
+    private Consumer<TransportOrderDTO> orderStartedListener;
+    private Consumer<TransportOrderDTO> orderCompletedListener;
+    private Consumer<String> statusChangeListener;
+
     public AuftraegeView(CraneCommandService craneCommandService, TransportOrderService transportOrderService,
-                         IngotService ingotService, StockyardService stockyardService) {
+                         TransportOrderProcessor orderProcessor, IngotService ingotService, StockyardService stockyardService) {
         this.craneCommandService = craneCommandService;
         this.transportOrderService = transportOrderService;
+        this.orderProcessor = orderProcessor;
         this.ingotService = ingotService;
         this.stockyardService = stockyardService;
 
@@ -63,8 +84,55 @@ public class AuftraegeView extends VerticalLayout {
         setSpacing(true);
 
         createHeader();
+        createAutoProcessingPanel();
         createTabs();
         loadData();
+
+        setupListeners();
+    }
+
+    @Override
+    protected void onAttach(AttachEvent attachEvent) {
+        super.onAttach(attachEvent);
+        updateAutoProcessingUI();
+    }
+
+    @Override
+    protected void onDetach(DetachEvent detachEvent) {
+        super.onDetach(detachEvent);
+        // Listeners werden bei Bedarf entfernt
+    }
+
+    private void setupListeners() {
+        UI ui = UI.getCurrent();
+
+        orderStartedListener = order -> {
+            ui.access(() -> {
+                loadOrders();
+                updateAutoProcessingUI();
+            });
+        };
+
+        orderCompletedListener = order -> {
+            ui.access(() -> {
+                loadOrders();
+                updateAutoProcessingUI();
+                Notification.show("Auftrag " + order.getTransportNo() + " abgeschlossen",
+                    3000, Notification.Position.BOTTOM_CENTER)
+                    .addThemeVariants(NotificationVariant.LUMO_SUCCESS);
+            });
+        };
+
+        statusChangeListener = message -> {
+            ui.access(() -> {
+                processingStatusLabel.setText(message);
+                updateAutoProcessingUI();
+            });
+        };
+
+        orderProcessor.addOrderStartedListener(orderStartedListener);
+        orderProcessor.addOrderCompletedListener(orderCompletedListener);
+        orderProcessor.addStatusChangeListener(statusChangeListener);
     }
 
     private void createHeader() {
@@ -80,6 +148,93 @@ public class AuftraegeView extends VerticalLayout {
         header.setJustifyContentMode(JustifyContentMode.BETWEEN);
 
         add(header);
+    }
+
+    private void createAutoProcessingPanel() {
+        HorizontalLayout panel = new HorizontalLayout();
+        panel.setWidthFull();
+        panel.setAlignItems(Alignment.CENTER);
+        panel.setPadding(true);
+        panel.getStyle()
+            .set("background-color", "#E3F2FD")
+            .set("border-radius", "8px")
+            .set("margin-bottom", "10px");
+
+        // Auto-Processing Button
+        autoProcessButton = new Button("Auto-Verarbeitung starten", VaadinIcon.PLAY.create());
+        autoProcessButton.addThemeVariants(ButtonVariant.LUMO_SUCCESS);
+        autoProcessButton.addClickListener(e -> toggleAutoProcessing());
+
+        // Abbruch Button
+        abortButton = new Button("Abbrechen", VaadinIcon.STOP.create());
+        abortButton.addThemeVariants(ButtonVariant.LUMO_ERROR);
+        abortButton.setEnabled(false);
+        abortButton.addClickListener(e -> {
+            orderProcessor.abortCurrentOrder();
+            updateAutoProcessingUI();
+        });
+
+        // Status Label
+        processingStatusLabel = new Span("Bereit");
+        processingStatusLabel.getStyle()
+            .set("font-weight", "bold")
+            .set("margin-left", "20px");
+
+        // Aktueller Auftrag
+        currentOrderLabel = new Span("");
+        currentOrderLabel.getStyle()
+            .set("color", "#1565C0")
+            .set("margin-left", "10px");
+
+        // Wartende Aufträge
+        Span pendingLabel = new Span();
+        pendingLabel.getStyle().set("margin-left", "auto");
+
+        panel.add(autoProcessButton, abortButton, processingStatusLabel, currentOrderLabel, pendingLabel);
+
+        add(panel);
+    }
+
+    private void toggleAutoProcessing() {
+        if (orderProcessor.isAutoProcessingEnabled()) {
+            orderProcessor.stopAutoProcessing();
+        } else {
+            orderProcessor.startAutoProcessing();
+        }
+        updateAutoProcessingUI();
+    }
+
+    private void updateAutoProcessingUI() {
+        boolean isEnabled = orderProcessor.isAutoProcessingEnabled();
+        boolean isProcessing = orderProcessor.isProcessing();
+
+        if (isEnabled) {
+            autoProcessButton.setText("Auto-Verarbeitung stoppen");
+            autoProcessButton.setIcon(VaadinIcon.PAUSE.create());
+            autoProcessButton.removeThemeVariants(ButtonVariant.LUMO_SUCCESS);
+            autoProcessButton.addThemeVariants(ButtonVariant.LUMO_ERROR);
+        } else {
+            autoProcessButton.setText("Auto-Verarbeitung starten");
+            autoProcessButton.setIcon(VaadinIcon.PLAY.create());
+            autoProcessButton.removeThemeVariants(ButtonVariant.LUMO_ERROR);
+            autoProcessButton.addThemeVariants(ButtonVariant.LUMO_SUCCESS);
+        }
+
+        abortButton.setEnabled(isProcessing);
+
+        // Aktueller Auftrag anzeigen
+        orderProcessor.getCurrentOrder().ifPresentOrElse(
+            order -> currentOrderLabel.setText("Aktuell: " + order.getTransportNo() + " (" + order.getRoute() + ")"),
+            () -> currentOrderLabel.setText("")
+        );
+
+        // Wartende Aufträge
+        int pending = orderProcessor.getPendingOrderCount();
+        if (pending > 0) {
+            processingStatusLabel.setText(isProcessing ? "Verarbeitet..." : pending + " Aufträge wartend");
+        } else if (!isProcessing) {
+            processingStatusLabel.setText("Keine wartenden Aufträge");
+        }
     }
 
     private void createTabs() {
@@ -240,33 +395,88 @@ public class AuftraegeView extends VerticalLayout {
 
         orderGrid.addColumn(TransportOrderDTO::getId)
             .setHeader("ID")
-            .setWidth("80px")
+            .setWidth("60px")
             .setFlexGrow(0);
+
+        // Status-Spalte mit farbiger Badge
+        orderGrid.addComponentColumn(dto -> {
+            Span badge = new Span(dto.getStatusDisplay());
+            badge.getStyle()
+                .set("padding", "2px 8px")
+                .set("border-radius", "12px")
+                .set("font-size", "11px")
+                .set("font-weight", "bold");
+
+            OrderStatus status = dto.getStatus();
+            if (status == null) status = OrderStatus.PENDING;
+
+            switch (status) {
+                case PENDING -> badge.getStyle()
+                    .set("background-color", "#FFF3E0")
+                    .set("color", "#E65100");
+                case IN_PROGRESS -> badge.getStyle()
+                    .set("background-color", "#E3F2FD")
+                    .set("color", "#1565C0");
+                case PICKED_UP -> badge.getStyle()
+                    .set("background-color", "#E8F5E9")
+                    .set("color", "#2E7D32");
+                case COMPLETED -> badge.getStyle()
+                    .set("background-color", "#C8E6C9")
+                    .set("color", "#1B5E20");
+                case FAILED -> badge.getStyle()
+                    .set("background-color", "#FFEBEE")
+                    .set("color", "#C62828");
+                case CANCELLED -> badge.getStyle()
+                    .set("background-color", "#ECEFF1")
+                    .set("color", "#546E7A");
+                case PAUSED -> badge.getStyle()
+                    .set("background-color", "#FFF8E1")
+                    .set("color", "#FF8F00");
+            }
+            return badge;
+        }).setHeader("Status")
+          .setWidth("100px")
+          .setFlexGrow(0);
 
         orderGrid.addColumn(dto -> dto.getTransportNo() != null ? dto.getTransportNo() : "-")
             .setHeader("Transport-Nr")
-            .setWidth("120px")
+            .setWidth("100px")
             .setFlexGrow(0);
 
-        orderGrid.addColumn(TransportOrderDTO::getRouteWithPositions)
+        orderGrid.addColumn(TransportOrderDTO::getRoute)
             .setHeader("Route")
-            .setWidth("200px")
+            .setWidth("140px")
             .setFlexGrow(0);
 
         orderGrid.addColumn(dto -> dto.getIngotNo() != null ? dto.getIngotNo() : "-")
             .setHeader("Barren")
-            .setWidth("120px")
-            .setFlexGrow(0);
-
-        orderGrid.addColumn(dto -> dto.getNormText() != null ? dto.getNormText() : "-")
-            .setHeader("Norm")
-            .setWidth("150px")
-            .setFlexGrow(0);
-
-        orderGrid.addColumn(dto -> dto.getToPilePosition() != null ? dto.getToPilePosition().toString() : "-")
-            .setHeader("Ziel-Pos")
             .setWidth("100px")
-            .setFlexGrow(1);
+            .setFlexGrow(0);
+
+        orderGrid.addColumn(dto -> {
+            Integer prio = dto.getPriority();
+            return prio != null && prio > 0 ? prio.toString() : "-";
+        }).setHeader("Prio")
+          .setWidth("60px")
+          .setFlexGrow(0);
+
+        // Aktion-Spalte mit Start-Button
+        orderGrid.addComponentColumn(dto -> {
+            if (dto.getStatus() == OrderStatus.PENDING) {
+                Button startBtn = new Button(VaadinIcon.PLAY.create());
+                startBtn.addThemeVariants(ButtonVariant.LUMO_SMALL, ButtonVariant.LUMO_SUCCESS);
+                startBtn.getElement().setAttribute("title", "Auftrag jetzt starten");
+                startBtn.addClickListener(e -> {
+                    orderProcessor.processOrder(dto);
+                    loadOrders();
+                    updateAutoProcessingUI();
+                });
+                return startBtn;
+            }
+            return new Span("");
+        }).setHeader("")
+          .setWidth("50px")
+          .setFlexGrow(1);
 
         // Klick-Listener für Detail-Dialog
         orderGrid.addItemClickListener(event -> {

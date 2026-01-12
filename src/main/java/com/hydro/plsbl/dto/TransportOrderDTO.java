@@ -1,5 +1,9 @@
 package com.hydro.plsbl.dto;
 
+import com.hydro.plsbl.entity.enums.OrderStatus;
+
+import java.time.LocalDateTime;
+
 /**
  * DTO für Transportauftrag-Daten
  */
@@ -18,6 +22,14 @@ public class TransportOrderDTO {
     private Long toYardId;
     private String toYardNo;
     private Integer toPilePosition;
+
+    // Status-Felder für automatische Verarbeitung
+    private OrderStatus status = OrderStatus.PENDING;
+    private Integer priority = 0;
+    private LocalDateTime startedAt;
+    private LocalDateTime completedAt;
+    private String errorMessage;
+    private Integer retryCount = 0;
 
     // === Getters & Setters ===
 
@@ -139,5 +151,76 @@ public class TransportOrderDTO {
         String fromPos = fromPilePosition != null ? "[" + fromPilePosition + "]" : "";
         String toPos = toPilePosition != null ? "[" + toPilePosition + "]" : "";
         return from + fromPos + " -> " + to + toPos;
+    }
+
+    // === Status Getters & Setters ===
+
+    public OrderStatus getStatus() {
+        return status;
+    }
+
+    public void setStatus(OrderStatus status) {
+        this.status = status;
+    }
+
+    public Integer getPriority() {
+        return priority;
+    }
+
+    public void setPriority(Integer priority) {
+        this.priority = priority;
+    }
+
+    public LocalDateTime getStartedAt() {
+        return startedAt;
+    }
+
+    public void setStartedAt(LocalDateTime startedAt) {
+        this.startedAt = startedAt;
+    }
+
+    public LocalDateTime getCompletedAt() {
+        return completedAt;
+    }
+
+    public void setCompletedAt(LocalDateTime completedAt) {
+        this.completedAt = completedAt;
+    }
+
+    public String getErrorMessage() {
+        return errorMessage;
+    }
+
+    public void setErrorMessage(String errorMessage) {
+        this.errorMessage = errorMessage;
+    }
+
+    public Integer getRetryCount() {
+        return retryCount;
+    }
+
+    public void setRetryCount(Integer retryCount) {
+        this.retryCount = retryCount;
+    }
+
+    /**
+     * Prüft ob der Auftrag aktiv ist (noch nicht abgeschlossen)
+     */
+    public boolean isActive() {
+        return status != null && status.isActive();
+    }
+
+    /**
+     * Prüft ob der Auftrag abgeschlossen ist
+     */
+    public boolean isFinal() {
+        return status != null && status.isFinal();
+    }
+
+    /**
+     * Gibt den Status als lesbaren Text zurück
+     */
+    public String getStatusDisplay() {
+        return status != null ? status.getDisplayName() : "Unbekannt";
     }
 }

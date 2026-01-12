@@ -1,5 +1,6 @@
 package com.hydro.plsbl.entity.transdata;
 
+import com.hydro.plsbl.entity.enums.OrderStatus;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.annotation.Transient;
 import org.springframework.data.annotation.Version;
@@ -59,6 +60,26 @@ public class TransportOrder implements Persistable<Long> {
 
     @Column("DELIVERED")
     private LocalDateTime delivered;
+
+    // === Neue Felder für automatische Verarbeitung ===
+
+    @Column("STATUS")
+    private String status;
+
+    @Column("PRIORITY")
+    private Integer priority;
+
+    @Column("STARTED_AT")
+    private LocalDateTime startedAt;
+
+    @Column("COMPLETED_AT")
+    private LocalDateTime completedAt;
+
+    @Column("ERROR_MESSAGE")
+    private String errorMessage;
+
+    @Column("RETRY_COUNT")
+    private Integer retryCount;
 
     // === Getters & Setters ===
 
@@ -164,6 +185,64 @@ public class TransportOrder implements Persistable<Long> {
 
     public void setDelivered(LocalDateTime delivered) {
         this.delivered = delivered;
+    }
+
+    // === Neue Getter/Setter für automatische Verarbeitung ===
+
+    public String getStatus() {
+        return status;
+    }
+
+    public void setStatus(String status) {
+        this.status = status;
+    }
+
+    public OrderStatus getOrderStatus() {
+        return OrderStatus.fromCode(status);
+    }
+
+    public void setOrderStatus(OrderStatus orderStatus) {
+        this.status = orderStatus != null ? orderStatus.getCode() : null;
+    }
+
+    public Integer getPriority() {
+        return priority;
+    }
+
+    public void setPriority(Integer priority) {
+        this.priority = priority;
+    }
+
+    public LocalDateTime getStartedAt() {
+        return startedAt;
+    }
+
+    public void setStartedAt(LocalDateTime startedAt) {
+        this.startedAt = startedAt;
+    }
+
+    public LocalDateTime getCompletedAt() {
+        return completedAt;
+    }
+
+    public void setCompletedAt(LocalDateTime completedAt) {
+        this.completedAt = completedAt;
+    }
+
+    public String getErrorMessage() {
+        return errorMessage;
+    }
+
+    public void setErrorMessage(String errorMessage) {
+        this.errorMessage = errorMessage;
+    }
+
+    public Integer getRetryCount() {
+        return retryCount;
+    }
+
+    public void setRetryCount(Integer retryCount) {
+        this.retryCount = retryCount;
     }
 
     // === Persistable Implementation ===

@@ -62,4 +62,16 @@ public interface TransportOrderRepository extends CrudRepository<TransportOrder,
      */
     @Query("SELECT COUNT(*) FROM TD_TRANSPORTORDER")
     int countAll();
+
+    /**
+     * Findet Aufträge nach Status
+     */
+    @Query("SELECT * FROM TD_TRANSPORTORDER WHERE STATUS = :status ORDER BY PRIORITY DESC NULLS LAST, ID ASC")
+    List<TransportOrder> findByStatus(@Param("status") String status);
+
+    /**
+     * Findet alle aktiven Aufträge (nicht abgeschlossen)
+     */
+    @Query("SELECT * FROM TD_TRANSPORTORDER WHERE STATUS IN ('P', 'I', 'U', 'H') ORDER BY PRIORITY DESC NULLS LAST, ID ASC")
+    List<TransportOrder> findActiveOrders();
 }

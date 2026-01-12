@@ -1,6 +1,7 @@
 package com.hydro.plsbl.service;
 
 import com.hydro.plsbl.dto.TransportOrderDTO;
+import com.hydro.plsbl.entity.enums.OrderStatus;
 import com.hydro.plsbl.entity.transdata.TransportOrder;
 import com.hydro.plsbl.repository.TransportOrderRepository;
 import org.slf4j.Logger;
@@ -13,6 +14,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.stream.Collectors;
+import java.util.stream.StreamSupport;
 
 /**
  * Service für Transportauftrag-Operationen
@@ -146,6 +148,76 @@ public class TransportOrderService {
         log.info("Transport order deleted: {}", id);
     }
 
+    // === Neue Methoden für automatische Verarbeitung ===
+
+    /**
+     * Findet alle wartenden Aufträge (Status = PENDING), sortiert nach Priorität
+     */
+    public List<TransportOrderDTO> findPendingOrders() {
+        log.debug("Loading pending transport orders");
+        return orderRepository.findByStatus("P").stream()
+            .map(this::toDTO)
+            .sorted((a, b) -> {
+                // Höhere Priorität zuerst, dann ältere zuerst
+                int prio = Integer.compare(
+                    b.getPriority() != null ? b.getPriority() : 0,
+                    a.getPriority() != null ? a.getPriority() : 0);
+                if (prio != 0) return prio;
+                return Long.compare(
+                    a.getId() != null ? a.getId() : 0,
+                    b.getId() != null ? b.getId() : 0);
+            })
+            .collect(Collectors.toList());
+    }
+
+    /**
+     * Findet alle aktiven Aufträge (IN_PROGRESS, PICKED_UP, PAUSED)
+     */
+    public List<TransportOrderDTO> findActiveOrders() {
+        log.debug("Loading active transport orders");
+        return orderRepository.findActiveOrders().stream()
+            .map(this::toDTO)
+            .collect(Collectors.toList());
+    }
+
+    /**
+     * Aktualisiert den Status eines Auftrags
+     */
+    @Transactional
+    public void updateStatus(Long orderId, OrderStatus status, String errorMessage) {
+        log.info("Updating order {} status to {}", orderId, status);
+
+        orderRepository.findById(orderId).ifPresent(order -> {
+            order.markNotNew();
+            order.setOrderStatus(status);
+
+            if (status == OrderStatus.IN_PROGRESS && order.getStartedAt() == null) {
+                order.setStartedAt(LocalDateTime.now());
+            }
+            if (status.isFinal()) {
+                order.setCompletedAt(LocalDateTime.now());
+            }
+            if (errorMessage != null) {
+                order.setErrorMessage(errorMessage);
+            }
+
+            orderRepository.save(order);
+        });
+    }
+
+    /**
+     * Erhöht den Retry-Counter eines Auftrags
+     */
+    @Transactional
+    public void incrementRetryCount(Long orderId) {
+        orderRepository.findById(orderId).ifPresent(order -> {
+            order.markNotNew();
+            int current = order.getRetryCount() != null ? order.getRetryCount() : 0;
+            order.setRetryCount(current + 1);
+            orderRepository.save(order);
+        });
+    }
+
     // === Mapping ===
 
     private TransportOrderDTO toDTO(TransportOrder entity) {
@@ -160,6 +232,14 @@ public class TransportOrderService {
         dto.setFromPilePosition(entity.getFromPilePosition());
         dto.setToYardId(entity.getToYardId());
         dto.setToPilePosition(entity.getToPilePosition());
+
+        // Status-Felder
+        dto.setStatus(entity.getOrderStatus());
+        dto.setPriority(entity.getPriority());
+        dto.setStartedAt(entity.getStartedAt());
+        dto.setCompletedAt(entity.getCompletedAt());
+        dto.setErrorMessage(entity.getErrorMessage());
+        dto.setRetryCount(entity.getRetryCount());
 
         // Referenzen auflösen
         if (entity.getFromYardId() != null) {
