@@ -2,6 +2,20 @@
 -- Testdaten für Entwicklung - Realistisches Lager-Layout
 -- ===================================================================
 
+-- Anwendungseinstellungen (SPS deaktiviert für Entwicklung -> Simulator)
+INSERT INTO MD_APPSETTING (SETTING_KEY, SETTING_VALUE, CATEGORY, DESCRIPTION) VALUES
+('SPS_ENABLED', '0', 'SPS', 'SPS-Verbindung aktiviert (1=ja, 0=nein)'),
+('SPS_URL', 's7://localhost:102', 'SPS', 'SPS-Verbindungs-URL'),
+('SPS_TIMEOUT', '10', 'SPS', 'Timeout in Sekunden'),
+('SPS_RETRY_COUNT', '3', 'SPS', 'Anzahl Wiederholungsversuche'),
+-- Lager-Grenzen exakt berechnet für Testdaten:
+-- X: Spalte 1 bei 3000mm, Spalte 17 bei 51000mm
+-- Y: Reihe 2 bei 6000mm, Reihe 10 bei 30000mm (Formel erfordert minY=3000)
+('LAGER_MIN_X', '3000', 'WAREHOUSE', 'Internes Lager min. X [mm]'),
+('LAGER_MAX_X', '51000', 'WAREHOUSE', 'Internes Lager max. X [mm]'),
+('LAGER_MIN_Y', '3000', 'WAREHOUSE', 'Internes Lager min. Y [mm]'),
+('LAGER_MAX_Y', '30000', 'WAREHOUSE', 'Internes Lager max. Y [mm]');
+
 -- Produkte
 INSERT INTO MD_PRODUCT (ID, SERIAL, PRODUCT_NO, DESCRIPTION, MAX_PER_LOCATION) VALUES
 (1, 1, '4047-001', 'Aluminium Barren Standard', 8),
@@ -193,3 +207,13 @@ INSERT INTO TD_STOCKYARDSTATUS (ID, SERIAL, STOCKYARD_ID, PRODUCT_ID, INGOTS_COU
 -- PlsStatus (Säge-Status) - nur 1 Eintrag
 INSERT INTO TD_PLSSTATUS (ID, SERIAL, PICKUP_MODE, PICKUP_IN_PROGRESS, ROTATE) VALUES
 (1, 1, 'NO_PICKUP', FALSE, FALSE);
+
+-- ===================================================================
+-- Transport-Aufträge (Beispiel für automatische Verarbeitung)
+-- ===================================================================
+INSERT INTO TD_TRANSPORTORDER (ID, SERIAL, TABLESERIAL, TRANSPORT_NO, NORMTEXT, FROM_YARD_ID, TO_YARD_ID, STATUS, PRIORITY) VALUES
+(1, 1, 1, 'TA-2024-0001', 'Umlagerung L01-10 nach L01-09', 101, 201, 'P', 5),
+(2, 1, 2, 'TA-2024-0002', 'Umlagerung L02-10 nach L02-09', 102, 202, 'P', 3),
+(3, 1, 3, 'TA-2024-0003', 'Umlagerung L03-10 nach L03-09', 103, 203, 'P', 1),
+(4, 1, 4, 'TA-2024-0004', 'Verladung L01-05 nach V01-05', 601, 616, 'C', 0),
+(5, 1, 5, 'TA-2024-0005', 'Verladung L02-05 nach V02-05', 602, 617, 'F', 0);

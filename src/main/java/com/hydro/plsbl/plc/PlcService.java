@@ -18,6 +18,8 @@ import org.springframework.stereotype.Service;
 
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -103,6 +105,20 @@ public class PlcService {
                 log.info("PlcService initialisiert - SPS und Simulator deaktiviert");
             }
         }
+    }
+
+    /**
+     * Wird aufgerufen nachdem alle Beans initialisiert sind.
+     * Prüft nochmal ob Simulator verfügbar ist (startet via ApplicationReadyEvent)
+     */
+    @EventListener(ApplicationReadyEvent.class)
+    public void onApplicationReady() {
+        // Prüfen ob Simulator jetzt läuft und wir ihn verwenden sollten
+        if (!useSimulator && !isConnected() && simulatorService.isRunning()) {
+            useSimulator = true;
+            log.info("ApplicationReady: Simulator erkannt - wechsle zu Simulator-Modus");
+        }
+        log.info("PlcService ready - Connected: {}, SimulatorMode: {}", isConnected(), isSimulatorMode());
     }
 
     @PreDestroy
@@ -208,6 +224,13 @@ public class PlcService {
             lastSuccessfulRead = System.currentTimeMillis();
             notifyStatusListeners(status);
             return;
+        }
+
+        // Automatisch auf Simulator wechseln wenn verfügbar und keine SPS-Verbindung
+        if (!useSimulator && !isConnected() && simulatorService.isRunning()) {
+            useSimulator = true;
+            log.info("Simulator erkannt - wechsle zu Simulator-Modus");
+            return; // Nächster Poll wird den Simulator nutzen
         }
 
         if (!settingsService.isSpsEnabled()) {

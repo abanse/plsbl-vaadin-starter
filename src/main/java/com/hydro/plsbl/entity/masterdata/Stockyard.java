@@ -45,14 +45,14 @@ public class Stockyard implements Persistable<Long> {
     @Column("YARD_USAGE")
     private String usageCode;
     
-    // Diese Spalten existieren nicht in der Oracle-Tabelle
-    @Transient
+    // Kran-Positionen in mm (für SPS-Steuerung)
+    @Column("X_POSITION")
     private int xPosition;
 
-    @Transient
+    @Column("Y_POSITION")
     private int yPosition;
 
-    @Transient
+    @Column("Z_POSITION")
     private int zPosition;
     
     @Column("LENGTH")

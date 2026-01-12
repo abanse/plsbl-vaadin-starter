@@ -562,14 +562,15 @@ public class SettingsService {
 
     /**
      * Konvertiert Grid-X-Koordinate zu mm-Position
+     * Grid-Spalte 1 = lagerMinX (links), Grid-Spalte gridCols = lagerMaxX (rechts)
      */
     public int gridToMmX(int gridX) {
         int lagerMaxX = getLagerMaxX();
         int lagerMinX = getLagerMinX();
         int gridCols = getGridCols();
         int range = lagerMaxX - lagerMinX;
-        if (gridCols <= 1) return lagerMaxX;
-        return lagerMaxX - ((gridX - 1) * range / (gridCols - 1));
+        if (gridCols <= 1) return lagerMinX;
+        return lagerMinX + ((gridX - 1) * range / (gridCols - 1));
     }
 
     /**
@@ -586,6 +587,7 @@ public class SettingsService {
 
     /**
      * Konvertiert mm-X-Position zu Grid-X-Koordinate
+     * lagerMinX (links) = Grid-Spalte 1, lagerMaxX (rechts) = Grid-Spalte gridCols
      */
     public int mmToGridX(int mmX) {
         int lagerMaxX = getLagerMaxX();
@@ -593,7 +595,7 @@ public class SettingsService {
         int gridCols = getGridCols();
         int range = lagerMaxX - lagerMinX;
         if (range <= 0) return 1;
-        int gridX = 1 + ((lagerMaxX - mmX) * (gridCols - 1) / range);
+        int gridX = 1 + ((mmX - lagerMinX) * (gridCols - 1) / range);
         return Math.max(1, Math.min(gridCols, gridX));
     }
 
