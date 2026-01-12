@@ -642,9 +642,7 @@ public class LagerView extends VerticalLayout {
         int gridX = mmToGridX(xMm);
         int gridY = mmToGridY(yMm);
 
-        // Grid-Position setzen (begrenzt auf gültigen Bereich)
-        gridX = Math.max(1, Math.min(settingsService.getGridCols(), gridX));
-        gridY = Math.max(1, Math.min(settingsService.getGridRows(), gridY));
+        // Grid-Position setzen (ohne Begrenzung, erlaubt Positionen außerhalb für Säge etc.)
         lagerGrid.setCraneGridPosition(gridX, gridY);
 
         log.debug("Crane (PLC): Phase={}, Pos=({},{},{})mm -> Grid({},{})",
@@ -697,9 +695,7 @@ public class LagerView extends VerticalLayout {
         int gridX = mmToGridX(xMm);
         int gridY = mmToGridY(yMm);
 
-        // Grid-Position setzen (begrenzt auf gültigen Bereich)
-        gridX = Math.max(1, Math.min(settingsService.getGridCols(), gridX));
-        gridY = Math.max(1, Math.min(settingsService.getGridRows(), gridY));
+        // Grid-Position setzen (ohne Begrenzung, erlaubt Positionen außerhalb für Säge etc.)
         lagerGrid.setCraneGridPosition(gridX, gridY);
 
         log.debug("Crane (Simulator): Phase={}, Pos=({},{},{})mm -> Grid({},{})",
@@ -753,9 +749,7 @@ public class LagerView extends VerticalLayout {
         int gridX = mmToGridX(xMm);
         int gridY = mmToGridY(yMm);
 
-        // Grid-Position setzen (begrenzt auf gültigen Bereich)
-        gridX = Math.max(1, Math.min(settingsService.getGridCols(), gridX));
-        gridY = Math.max(1, Math.min(settingsService.getGridRows(), gridY));
+        // Grid-Position setzen (ohne Begrenzung, erlaubt Positionen außerhalb für Säge etc.)
         lagerGrid.setCraneGridPosition(gridX, gridY);
 
         log.debug("Crane updated: Mode={}, State={}, Pos=({},{},{})mm -> Grid({},{})",

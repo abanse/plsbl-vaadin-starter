@@ -20,9 +20,9 @@ CREATE TABLE IF NOT EXISTS MD_STOCKYARD (
     DESCRIPTION     VARCHAR(256),
     YARD_TYPE       CHAR(1) NOT NULL,      -- I=Internal, E=External, S=Saw, O=SwapOut, L=Loading
     YARD_USAGE      CHAR(1) NOT NULL,      -- S=Short, L=Long, A=Automatic
-    X_POSITION      INT NOT NULL,          -- mm
-    Y_POSITION      INT NOT NULL,          -- mm
-    Z_POSITION      INT DEFAULT 0,         -- mm
+    BOTTOM_CENTER_X INT NOT NULL,          -- mm (Kran X-Position)
+    BOTTOM_CENTER_Y INT NOT NULL,          -- mm (Kran Y-Position)
+    BOTTOM_CENTER_Z INT DEFAULT 0,         -- mm (Kran Z-Position)
     LENGTH          INT NOT NULL,          -- mm
     WIDTH           INT NOT NULL,          -- mm
     HEIGHT          INT DEFAULT 0,         -- mm, 0 = unlimited

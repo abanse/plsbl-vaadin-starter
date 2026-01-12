@@ -247,6 +247,7 @@ public class TransportOrderProcessor {
             // Status aktualisieren
             currentOrder.set(order);
             orderService.updateStatus(order.getId(), OrderStatus.IN_PROGRESS, null);
+            order.setStatus(OrderStatus.IN_PROGRESS); // Lokales DTO auch aktualisieren
             notifyOrderStarted(order);
             notifyStatusChange("Auftrag " + order.getTransportNo() + " gestartet");
 

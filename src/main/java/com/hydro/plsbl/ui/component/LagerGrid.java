@@ -219,7 +219,15 @@ public class LagerGrid extends Div {
         }
 
         // Stockyard-Buttons platzieren
+        StockyardDTO sawYard = null;  // Säge-Position separat behandeln
+
         for (StockyardDTO yard : stockyards.values()) {
+            // Säge-Position separat speichern
+            if (yard.getType() == StockyardType.SAW) {
+                sawYard = yard;
+                continue;  // Nicht im normalen Grid platzieren
+            }
+
             StockyardButton button = new StockyardButton(yard, settingsService);
 
             // Click-Handler
@@ -257,9 +265,12 @@ public class LagerGrid extends Div {
 
         log.info("Grid built with {} buttons", buttonMap.size());
 
+        // Säge-Position als spezieller Button behandeln
+        final StockyardDTO finalSawYard = sawYard;
+
         // Zusätzliche visuelle Elemente hinzufügen
         addZaun();
-        addSaegeausgang();
+        addSaegeausgang(finalSawYard);
         addAussenplaetze();
         addZusaetzlicheLagerplaetze();  // 00/01 bis 00/08
         addBeladungsflaeche();
@@ -269,8 +280,9 @@ public class LagerGrid extends Div {
 
     /**
      * Fügt die Säge oben rechts hinzu (Reihe 1, Spalte 23)
+     * Wenn ein Säge-Lagerplatz vorhanden ist, wird er als interaktiver Button angezeigt
      */
-    private void addSaegeausgang() {
+    private void addSaegeausgang(StockyardDTO sawYard) {
         // Säge-Container - Reihe 1, Spalte 23
         Div saegeContainer = new Div();
         saegeContainer.addClassName("saege-container");
@@ -283,23 +295,53 @@ public class LagerGrid extends Div {
             .set("justify-content", "center")
             .set("gap", "3px");
 
-        // Säge-Symbol (blau gestreift wie im Original)
-        Div saege = new Div();
-        saege.getStyle()
-            .set("width", "65px")
-            .set("height", "38px")
-            .set("background", "linear-gradient(90deg, #1565C0 0%, #1565C0 15%, #90CAF9 15%, #90CAF9 30%, #1565C0 30%, #1565C0 45%, #90CAF9 45%, #90CAF9 60%, #1565C0 60%, #1565C0 75%, #90CAF9 75%, #90CAF9 90%, #1565C0 90%)")
-            .set("border-radius", "4px")
-            .set("border", "2px solid #0D47A1");
+        if (sawYard != null) {
+            // Interaktiver Säge-Button mit Barren-Anzeige
+            StockyardButton sawButton = new StockyardButton(sawYard, settingsService);
+            sawButton.getStyle()
+                .set("width", "65px")
+                .set("height", "45px")
+                .set("border", "2px solid #0D47A1")
+                .set("background", "linear-gradient(135deg, #1565C0 0%, #42A5F5 100%)");
 
-        // Label
-        Span label = new Span("Säge");
-        label.getStyle()
-            .set("font-size", "10px")
-            .set("font-weight", "bold")
-            .set("color", "#333");
+            // Click-Handler
+            sawButton.addClickListener(e -> {
+                if (clickListener != null) {
+                    clickListener.accept(sawYard);
+                }
+            });
 
-        saegeContainer.add(saege, label);
+            // Label
+            Span label = new Span("Säge");
+            label.getStyle()
+                .set("font-size", "10px")
+                .set("font-weight", "bold")
+                .set("color", "#333");
+
+            saegeContainer.add(sawButton, label);
+            buttonMap.put(sawYard.getId(), sawButton);
+
+            log.info("Saw position added with stockyard data: {}", sawYard.getYardNumber());
+        } else {
+            // Fallback: Statisches Säge-Symbol (kein Stockyard definiert)
+            Div saege = new Div();
+            saege.getStyle()
+                .set("width", "65px")
+                .set("height", "38px")
+                .set("background", "linear-gradient(90deg, #1565C0 0%, #1565C0 15%, #90CAF9 15%, #90CAF9 30%, #1565C0 30%, #1565C0 45%, #90CAF9 45%, #90CAF9 60%, #1565C0 60%, #1565C0 75%, #90CAF9 75%, #90CAF9 90%, #1565C0 90%)")
+                .set("border-radius", "4px")
+                .set("border", "2px solid #0D47A1");
+
+            // Label
+            Span label = new Span("Säge");
+            label.getStyle()
+                .set("font-size", "10px")
+                .set("font-weight", "bold")
+                .set("color", "#333");
+
+            saegeContainer.add(saege, label);
+        }
+
         add(saegeContainer);
     }
 

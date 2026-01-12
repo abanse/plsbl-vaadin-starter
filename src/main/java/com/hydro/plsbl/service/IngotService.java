@@ -123,6 +123,7 @@ public class IngotService {
     public IngotDTO save(IngotDTO dto) {
         log.debug("Saving ingot: {}", dto.getId());
 
+        boolean isNewIngot = (dto.getId() == null);
         Ingot entity;
         if (dto.getId() != null) {
             // Update - mark as not new so Spring Data JDBC does UPDATE instead of INSERT
@@ -157,7 +158,36 @@ public class IngotService {
         Ingot saved = ingotRepository.save(entity);
         log.info("Ingot saved with ID: {}", saved.getId());
 
+        // StockyardStatus aktualisieren wenn neuer Barren erstellt wurde
+        if (isNewIngot && dto.getStockyardId() != null) {
+            updateStockyardStatusForNewIngot(dto.getStockyardId(), dto.getProductId());
+        }
+
         return toDTO(saved);
+    }
+
+    /**
+     * Aktualisiert StockyardStatus wenn ein neuer Barren erstellt wird
+     */
+    private void updateStockyardStatusForNewIngot(Long stockyardId, Long productId) {
+        Optional<StockyardStatus> existingStatus = stockyardStatusRepository.findByStockyardId(stockyardId);
+        if (existingStatus.isPresent()) {
+            // Anzahl erhöhen
+            StockyardStatus status = existingStatus.get();
+            int newCount = status.getIngotsCount() + 1;
+            jdbcTemplate.update(
+                "UPDATE TD_STOCKYARDSTATUS SET INGOTS_COUNT = ?, SERIAL = SERIAL + 1 WHERE ID = ?",
+                newCount, status.getId());
+            log.debug("StockyardStatus updated for stockyard {}: count={}", stockyardId, newCount);
+        } else {
+            // Neuen Status erstellen
+            Long newId = getNextStatusId();
+            String yardUsage = getYardUsageForStockyard(stockyardId);
+            jdbcTemplate.update(
+                "INSERT INTO TD_STOCKYARDSTATUS (ID, STOCKYARD_ID, PRODUCT_ID, INGOTS_COUNT, YARD_USAGE, PILE_HEIGHT, SERIAL) VALUES (?, ?, ?, 1, ?, 1, 1)",
+                newId, stockyardId, productId, yardUsage);
+            log.info("StockyardStatus created for stockyard {} with product {} and yardUsage={}", stockyardId, productId, yardUsage);
+        }
     }
 
     private Long getNextId() {
@@ -245,7 +275,7 @@ public class IngotService {
             Long newId = getNextStatusId();
             String yardUsage = getYardUsageForStockyard(destinationStockyardId);
             jdbcTemplate.update(
-                "INSERT INTO TD_STOCKYARDSTATUS (ID, STOCKYARD_ID, PRODUCT_ID, INGOTS_COUNT, YARD_USAGE, PILE_HEIGHT, SERIAL, TABLESERIAL) VALUES (?, ?, ?, 1, ?, 1, 1, 1)",
+                "INSERT INTO TD_STOCKYARDSTATUS (ID, STOCKYARD_ID, PRODUCT_ID, INGOTS_COUNT, YARD_USAGE, PILE_HEIGHT, SERIAL) VALUES (?, ?, ?, 1, ?, 1, 1)",
                 newId, destinationStockyardId, productId, yardUsage);
             log.debug("StockyardStatus created for destination stockyard {} with yardUsage={}", destinationStockyardId, yardUsage);
         }

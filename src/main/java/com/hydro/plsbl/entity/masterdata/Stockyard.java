@@ -46,13 +46,13 @@ public class Stockyard implements Persistable<Long> {
     private String usageCode;
     
     // Kran-Positionen in mm (für SPS-Steuerung)
-    @Column("X_POSITION")
+    @Column("BOTTOM_CENTER_X")
     private int xPosition;
 
-    @Column("Y_POSITION")
+    @Column("BOTTOM_CENTER_Y")
     private int yPosition;
 
-    @Column("Z_POSITION")
+    @Column("BOTTOM_CENTER_Z")
     private int zPosition;
     
     @Column("LENGTH")

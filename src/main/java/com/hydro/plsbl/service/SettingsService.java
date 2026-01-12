@@ -588,6 +588,7 @@ public class SettingsService {
     /**
      * Konvertiert mm-X-Position zu Grid-X-Koordinate
      * lagerMinX (links) = Grid-Spalte 1, lagerMaxX (rechts) = Grid-Spalte gridCols
+     * Positionen außerhalb des Lagers (z.B. Säge) ergeben Werte außerhalb 1-gridCols
      */
     public int mmToGridX(int mmX) {
         int lagerMaxX = getLagerMaxX();
@@ -595,12 +596,13 @@ public class SettingsService {
         int gridCols = getGridCols();
         int range = lagerMaxX - lagerMinX;
         if (range <= 0) return 1;
-        int gridX = 1 + ((mmX - lagerMinX) * (gridCols - 1) / range);
-        return Math.max(1, Math.min(gridCols, gridX));
+        // Keine Begrenzung - erlaubt Positionen außerhalb des Grids (z.B. für Säge)
+        return 1 + ((mmX - lagerMinX) * (gridCols - 1) / range);
     }
 
     /**
      * Konvertiert mm-Y-Position zu Grid-Y-Koordinate
+     * Positionen außerhalb des Lagers (z.B. Säge) ergeben Werte außerhalb 1-gridRows
      */
     public int mmToGridY(int mmY) {
         int lagerMaxY = getLagerMaxY();
@@ -608,8 +610,8 @@ public class SettingsService {
         int gridRows = getGridRows();
         int range = lagerMaxY - lagerMinY;
         if (range <= 0) return 1;
-        int gridY = 1 + ((mmY - lagerMinY) * (gridRows - 1) / range);
-        return Math.max(1, Math.min(gridRows, gridY));
+        // Keine Begrenzung - erlaubt Positionen außerhalb des Grids (z.B. für Säge)
+        return 1 + ((mmY - lagerMinY) * (gridRows - 1) / range);
     }
 
     /**

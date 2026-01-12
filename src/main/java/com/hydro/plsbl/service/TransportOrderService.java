@@ -109,6 +109,14 @@ public class TransportOrderService {
         entity.setToYardId(dto.getToYardId());
         entity.setToPilePosition(dto.getToPilePosition());
         entity.setCalloffId(dto.getCalloffId());
+        entity.setPriority(dto.getPriority() != null ? dto.getPriority() : 0);
+
+        // Status setzen - Default ist PENDING für neue Aufträge
+        if (dto.getStatus() != null) {
+            entity.setOrderStatus(dto.getStatus());
+        } else if (entity.getStatus() == null) {
+            entity.setOrderStatus(OrderStatus.PENDING);
+        }
 
         TransportOrder saved = orderRepository.save(entity);
         log.info("Transport order saved with ID: {}", saved.getId());
