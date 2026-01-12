@@ -1,0 +1,51 @@
+/* 
+ * PLSBL Vaadin Theme
+ * Custom Styles für PLS Barrenlager
+ */
+
+/* === Lager-Grid === */
+.lager-grid {
+    background-color: #f5f5f5;
+    border-radius: 8px;
+}
+
+/* === Allgemeine Anpassungen === */
+html {
+    --lumo-primary-color: #1976D2;
+    --lumo-primary-color-50pct: rgba(25, 118, 210, 0.5);
+    --lumo-primary-text-color: #1976D2;
+}
+
+/* Header */
+.header {
+    background-color: #1976D2;
+    color: white;
+}
+
+/* Status-Farben */
+.status-ok {
+    color: #4CAF50;
+}
+
+.status-warning {
+    color: #FF9800;
+}
+
+.status-error {
+    color: #F44336;
+}
+
+/* Dialog Styling */
+vaadin-dialog-overlay::part(content) {
+    padding: 0;
+}
+
+vaadin-dialog-overlay::part(header) {
+    background-color: #1976D2;
+    color: white;
+}
+
+/* Tooltip Styling */
+vaadin-tooltip {
+    --vaadin-tooltip-background-color: #424242;
+}

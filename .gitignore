@@ -1,0 +1,35 @@
+# Build
+target/
+build/
+node_modules/
+etc/
+# IDE
+.idea/
+*.iml
+.vscode/
+.settings/
+.project
+.classpath
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+nul
+
+# Temp files
+~$*
+*.tmp
+*.bak
+
+# Vaadin
+frontend/generated/
+node_modules/
+
+# Claude Code
+.claude/
+
+# Logs
+*.log
+logs/
