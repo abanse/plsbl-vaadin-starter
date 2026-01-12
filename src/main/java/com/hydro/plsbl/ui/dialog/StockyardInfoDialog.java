@@ -21,6 +21,8 @@ import com.vaadin.flow.component.orderedlayout.FlexComponent;
 import com.vaadin.flow.component.orderedlayout.HorizontalLayout;
 import com.vaadin.flow.component.orderedlayout.VerticalLayout;
 
+import com.hydro.plsbl.plc.PlcService;
+
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.function.Consumer;
@@ -35,6 +37,7 @@ public class StockyardInfoDialog extends Dialog {
     private final StockyardDTO stockyard;
     private final IngotService ingotService;
     private final StockyardService stockyardService;
+    private final PlcService plcService;
     private Consumer<StockyardDTO> onEdit;
     private Consumer<StockyardDTO> onDelete;
     private Consumer<StockyardDTO> onForceDelete;
@@ -42,10 +45,12 @@ public class StockyardInfoDialog extends Dialog {
     private Consumer<Void> onRelocated;
     private Grid<IngotDTO> ingotGrid;
 
-    public StockyardInfoDialog(StockyardDTO stockyard, IngotService ingotService, StockyardService stockyardService) {
+    public StockyardInfoDialog(StockyardDTO stockyard, IngotService ingotService,
+                               StockyardService stockyardService, PlcService plcService) {
         this.stockyard = stockyard;
         this.ingotService = ingotService;
         this.stockyardService = stockyardService;
+        this.plcService = plcService;
 
         setHeaderTitle("Lagerplatz " + stockyard.getYardNumber());
         setWidth("750px");
@@ -55,9 +60,13 @@ public class StockyardInfoDialog extends Dialog {
         createFooter();
     }
 
-    // Backwards compatibility constructor
+    // Backwards compatibility constructors
+    public StockyardInfoDialog(StockyardDTO stockyard, IngotService ingotService, StockyardService stockyardService) {
+        this(stockyard, ingotService, stockyardService, null);
+    }
+
     public StockyardInfoDialog(StockyardDTO stockyard, IngotService ingotService) {
-        this(stockyard, ingotService, null);
+        this(stockyard, ingotService, null, null);
     }
 
     private void createContent() {
@@ -414,7 +423,7 @@ public class StockyardInfoDialog extends Dialog {
 
     private void openUmlagernDialog() {
         try {
-            UmlagernDialog dialog = new UmlagernDialog(stockyard, ingotService, stockyardService);
+            UmlagernDialog dialog = new UmlagernDialog(stockyard, ingotService, stockyardService, plcService);
             dialog.setOnRelocated(v -> {
                 // Grid aktualisieren
                 loadIngotData();

@@ -3,6 +3,8 @@ package com.hydro.plsbl.ui.view;
 import com.hydro.plsbl.dto.CraneStatusDTO;
 import com.hydro.plsbl.dto.IngotDTO;
 import com.hydro.plsbl.dto.StockyardDTO;
+import com.hydro.plsbl.plc.PlcService;
+import com.hydro.plsbl.plc.dto.PlcCommand;
 import com.hydro.plsbl.service.CraneStatusService;
 import com.hydro.plsbl.service.IngotService;
 import com.hydro.plsbl.service.SettingsService;
@@ -62,6 +64,7 @@ public class LagerView extends VerticalLayout {
     private final CraneStatusService craneStatusService;
     private final CraneSimulatorService simulatorService;
     private final SettingsService settingsService;
+    private final PlcService plcService;
     private LagerGrid lagerGrid;
     private TextField searchField;
     private Map<Long, StockyardDTO> allStockyards = new LinkedHashMap<>();
@@ -77,12 +80,13 @@ public class LagerView extends VerticalLayout {
 
     public LagerView(StockyardService stockyardService, IngotService ingotService,
                      CraneStatusService craneStatusService, CraneSimulatorService simulatorService,
-                     SettingsService settingsService) {
+                     SettingsService settingsService, PlcService plcService) {
         this.stockyardService = stockyardService;
         this.ingotService = ingotService;
         this.craneStatusService = craneStatusService;
         this.simulatorService = simulatorService;
         this.settingsService = settingsService;
+        this.plcService = plcService;
 
         setSizeFull();
         setPadding(true);
@@ -144,10 +148,11 @@ public class LagerView extends VerticalLayout {
         newButton.addThemeVariants(ButtonVariant.LUMO_PRIMARY);
         newButton.addClickListener(e -> openNewStockyardDialog());
 
-        // Simulator-Umlagern Button
-        relocateButton = new Button("Umlagern (Sim)", VaadinIcon.ARROWS_LONG_H.create());
+        // Kran-Umlagern Button (funktioniert mit Simulator oder echter SPS)
+        relocateButton = new Button("Umlagern", VaadinIcon.ARROWS_LONG_H.create());
         relocateButton.addClickListener(e -> toggleRelocateMode());
-        relocateButton.setEnabled(simulatorService.isRunning());
+        boolean craneAvailable = plcService.isConnected() || plcService.isSimulatorMode();
+        relocateButton.setEnabled(craneAvailable);
 
         HorizontalLayout header = new HorizontalLayout(title, info, spacer, searchField, refreshButton, relocateButton, newButton);
         header.setAlignItems(Alignment.BASELINE);
@@ -331,8 +336,8 @@ public class LagerView extends VerticalLayout {
             return;
         }
 
-        // Info-Dialog öffnen mit IngotService und StockyardService
-        StockyardInfoDialog dialog = new StockyardInfoDialog(stockyard, ingotService, stockyardService);
+        // Info-Dialog öffnen mit IngotService, StockyardService und PlcService
+        StockyardInfoDialog dialog = new StockyardInfoDialog(stockyard, ingotService, stockyardService, plcService);
         dialog.setOnEdit(this::openEditDialog);
         dialog.setOnDelete(this::deleteStockyard);
         dialog.setOnForceDelete(this::forceDeleteStockyard);
@@ -345,9 +350,10 @@ public class LagerView extends VerticalLayout {
      * Schaltet den Umlagern-Modus um
      */
     private void toggleRelocateMode() {
-        if (!simulatorService.isRunning()) {
+        boolean craneAvailable = plcService.isConnected() || plcService.isSimulatorMode();
+        if (!craneAvailable) {
             com.vaadin.flow.component.notification.Notification
-                .show("Simulator ist nicht gestartet!", 3000,
+                .show("Kran nicht verfügbar! Bitte SPS oder Simulator aktivieren.", 3000,
                     com.vaadin.flow.component.notification.Notification.Position.MIDDLE);
             return;
         }
@@ -358,12 +364,13 @@ public class LagerView extends VerticalLayout {
         if (relocateMode) {
             relocateButton.addThemeVariants(ButtonVariant.LUMO_PRIMARY);
             relocateButton.setText("Umlagern: Quelle wählen");
+            String modeText = plcService.isSimulatorMode() ? "(Simulator)" : "(SPS)";
             com.vaadin.flow.component.notification.Notification
-                .show("Umlagern-Modus: Klicken Sie auf den Quell-Lagerplatz", 3000,
+                .show("Umlagern-Modus " + modeText + ": Klicken Sie auf den Quell-Lagerplatz", 3000,
                     com.vaadin.flow.component.notification.Notification.Position.BOTTOM_CENTER);
         } else {
             relocateButton.removeThemeVariants(ButtonVariant.LUMO_PRIMARY);
-            relocateButton.setText("Umlagern (Sim)");
+            relocateButton.setText("Umlagern");
             com.vaadin.flow.component.notification.Notification
                 .show("Umlagern-Modus beendet", 2000,
                     com.vaadin.flow.component.notification.Notification.Position.BOTTOM_CENTER);
@@ -410,38 +417,47 @@ public class LagerView extends VerticalLayout {
     }
 
     /**
-     * Sendet einen Umlager-Befehl an den Simulator
+     * Sendet einen Umlager-Befehl an den Kran (SPS oder Simulator)
      */
     private void sendSimulatorRelocateCommand(StockyardDTO source, StockyardDTO destination) {
-        log.info("Simulator relocate: {} -> {}", source.getYardNumber(), destination.getYardNumber());
+        String modeText = plcService.isSimulatorMode() ? "Simulator" : "SPS";
+        log.info("{} relocate: {} -> {}", modeText, source.getYardNumber(), destination.getYardNumber());
 
-        // Positionen in mm aus Grid-Koordinaten berechnen
-        // Grid-Koordinate * mm pro Grid-Einheit = mm-Position
-        int pickupX = gridToMmX(source.getXCoordinate());
-        int pickupY = gridToMmY(source.getYCoordinate());
+        // Positionen in mm - bevorzuge gespeicherte Position, sonst Grid-Umrechnung
+        int pickupX = source.getXPosition() > 0 ? source.getXPosition() : gridToMmX(source.getXCoordinate());
+        int pickupY = source.getYPosition() > 0 ? source.getYPosition() : gridToMmY(source.getYCoordinate());
         int pickupZ = source.getZPosition() > 0 ? source.getZPosition() : 2000;
 
-        int releaseX = gridToMmX(destination.getXCoordinate());
-        int releaseY = gridToMmY(destination.getYCoordinate());
+        int releaseX = destination.getXPosition() > 0 ? destination.getXPosition() : gridToMmX(destination.getXCoordinate());
+        int releaseY = destination.getYPosition() > 0 ? destination.getYPosition() : gridToMmY(destination.getYCoordinate());
         int releaseZ = destination.getZPosition() > 0 ? destination.getZPosition() : 2000;
 
-        // Kommando erstellen
-        CraneSimulatorCommand cmd = CraneSimulatorCommand.builder()
-            .pickup(pickupX, pickupY, pickupZ)
-            .release(releaseX, releaseY, releaseZ)
-            .fromStockyard(source.getId())
-            .toStockyard(destination.getId())
-            .ingot(5000, 500, 200, 1500)  // Default Barren-Maße
+        // PlcCommand erstellen
+        PlcCommand cmd = PlcCommand.builder()
+            .pickupPosition(pickupX, pickupY, pickupZ)
+            .releasePosition(releaseX, releaseY, releaseZ)
+            .dimensions(5000, 500, 200)  // Default Barren-Maße (L x B x H)
+            .weight(1500)
+            .longIngot(false)
+            .rotate(false)
             .build();
 
-        // An Simulator senden
-        simulatorService.sendCommand(cmd);
+        try {
+            // An PlcService senden (verteilt an SPS oder Simulator)
+            plcService.sendCommand(cmd);
 
-        com.vaadin.flow.component.notification.Notification
-            .show(String.format("Umlagern gestartet: %s → %s",
-                source.getYardNumber(), destination.getYardNumber()),
-                5000, com.vaadin.flow.component.notification.Notification.Position.BOTTOM_CENTER)
-            .addThemeVariants(com.vaadin.flow.component.notification.NotificationVariant.LUMO_SUCCESS);
+            com.vaadin.flow.component.notification.Notification
+                .show(String.format("Umlagern gestartet (%s): %s → %s",
+                    modeText, source.getYardNumber(), destination.getYardNumber()),
+                    5000, com.vaadin.flow.component.notification.Notification.Position.BOTTOM_CENTER)
+                .addThemeVariants(com.vaadin.flow.component.notification.NotificationVariant.LUMO_SUCCESS);
+        } catch (Exception e) {
+            log.error("Fehler beim Senden des Umlagern-Befehls", e);
+            com.vaadin.flow.component.notification.Notification
+                .show("Fehler: " + e.getMessage(), 5000,
+                    com.vaadin.flow.component.notification.Notification.Position.MIDDLE)
+                .addThemeVariants(com.vaadin.flow.component.notification.NotificationVariant.LUMO_ERROR);
+        }
     }
 
     private void deleteStockyard(StockyardDTO stockyard) {
@@ -552,22 +568,28 @@ public class LagerView extends VerticalLayout {
 
     /**
      * Lädt den aktuellen Kran-Status und aktualisiert die Anzeige.
-     * Verwendet den Simulator wenn er läuft, sonst die Datenbank.
+     * Verwendet PlcService (SPS oder Simulator) oder die Datenbank als Fallback.
      */
     private void loadCraneStatus() {
         try {
-            boolean simRunning = simulatorService.isRunning();
+            boolean craneAvailable = plcService.isConnected() || plcService.isSimulatorMode();
 
             // Button-Status aktualisieren
             if (relocateButton != null && !relocateMode) {
-                relocateButton.setEnabled(simRunning);
+                relocateButton.setEnabled(craneAvailable);
             }
 
-            // Wenn Simulator läuft, dessen Position verwenden
-            if (simRunning) {
+            // Wenn PlcService im Simulator-Modus, Simulator-Status verwenden
+            if (plcService.isSimulatorMode()) {
                 updateCraneFromSimulator();
+            } else if (plcService.isConnected()) {
+                // Echte SPS - Status vom PlcService holen
+                var plcStatus = plcService.getCurrentStatus();
+                if (plcStatus != null) {
+                    updateCraneFromPlcStatus(plcStatus);
+                }
             } else {
-                // Sonst Datenbank-Status verwenden
+                // Fallback: Datenbank-Status verwenden
                 Optional<CraneStatusDTO> statusOpt = craneStatusService.getCurrentStatus();
                 if (statusOpt.isPresent()) {
                     updateCraneDisplay(statusOpt.get());
@@ -578,6 +600,55 @@ public class LagerView extends VerticalLayout {
         } catch (Exception e) {
             log.debug("Error loading crane status: {}", e.getMessage());
         }
+    }
+
+    /**
+     * Aktualisiert die Kran-Anzeige aus dem PlcStatus
+     */
+    private void updateCraneFromPlcStatus(com.hydro.plsbl.plc.dto.PlcStatus plcStatus) {
+        if (lagerGrid == null) return;
+
+        int xMm = plcStatus.getXPosition();
+        int yMm = plcStatus.getYPosition();
+        int zMm = plcStatus.getZPosition();
+
+        // Status-Display aktualisieren
+        var posDisplay = lagerGrid.getCranePositionDisplay();
+        if (posDisplay != null) {
+            posDisplay.updateStatus(
+                xMm, yMm, zMm,
+                plcStatus.getCraneMode() != null ? plcStatus.getCraneMode().getDisplayName() : "?",
+                plcStatus.getJobState() != null ? plcStatus.getJobState().getDisplayName() : "?",
+                plcStatus.getGripperState() != null ? plcStatus.getGripperState().getDisplayName() : "?",
+                null, null, null, null, null
+            );
+        }
+
+        // Greifer-Höhe setzen
+        var craneOverlay = lagerGrid.getCraneOverlay();
+        if (craneOverlay != null) {
+            int gripperHeight = Math.max(0, Math.min(100, zMm / 100));
+            craneOverlay.setGripperHeight(gripperHeight);
+
+            // Barren anzeigen wenn geladen
+            if (plcStatus.getGripperState() == com.hydro.plsbl.plc.dto.GripperState.LOADED) {
+                craneOverlay.setIngot("PLC", "SPS-Barren", 40, 30);
+            } else {
+                craneOverlay.clearIngot();
+            }
+        }
+
+        // mm zu Grid-Koordinaten konvertieren
+        int gridX = mmToGridX(xMm);
+        int gridY = mmToGridY(yMm);
+
+        // Grid-Position setzen (begrenzt auf gültigen Bereich)
+        gridX = Math.max(1, Math.min(settingsService.getGridCols(), gridX));
+        gridY = Math.max(1, Math.min(settingsService.getGridRows(), gridY));
+        lagerGrid.setCraneGridPosition(gridX, gridY);
+
+        log.debug("Crane (PLC): Phase={}, Pos=({},{},{})mm -> Grid({},{})",
+                plcStatus.getWorkPhase(), xMm, yMm, zMm, gridX, gridY);
     }
 
     /**

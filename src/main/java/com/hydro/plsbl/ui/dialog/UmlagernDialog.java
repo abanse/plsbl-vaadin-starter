@@ -2,6 +2,9 @@ package com.hydro.plsbl.ui.dialog;
 
 import com.hydro.plsbl.dto.IngotDTO;
 import com.hydro.plsbl.dto.StockyardDTO;
+import com.hydro.plsbl.plc.PlcException;
+import com.hydro.plsbl.plc.PlcService;
+import com.hydro.plsbl.plc.dto.PlcCommand;
 import com.hydro.plsbl.service.IngotService;
 import com.hydro.plsbl.service.StockyardService;
 import com.vaadin.flow.component.button.Button;
@@ -20,6 +23,7 @@ import com.vaadin.flow.component.notification.NotificationVariant;
 import com.vaadin.flow.component.orderedlayout.FlexComponent;
 import com.vaadin.flow.component.orderedlayout.HorizontalLayout;
 import com.vaadin.flow.component.orderedlayout.VerticalLayout;
+import com.vaadin.flow.component.radiobutton.RadioButtonGroup;
 
 import java.util.HashSet;
 import java.util.List;
@@ -31,15 +35,21 @@ import java.util.function.Consumer;
  */
 public class UmlagernDialog extends Dialog {
 
+    private static final String MODE_CRANE = "Mit Kran (SPS/Simulator)";
+    private static final String MODE_DATABASE = "Nur Datenbank";
+
     private final StockyardDTO sourceStockyard;
     private final IngotService ingotService;
     private final StockyardService stockyardService;
+    private final PlcService plcService;
 
     private Grid<IngotDTO> ingotGrid;
     private ComboBox<StockyardDTO> destinationComboBox;
+    private RadioButtonGroup<String> modeSelector;
     private Set<IngotDTO> selectedIngots = new HashSet<>();
     private IngotDTO topIngot; // Oberster Barren der umgelagert wird
     private Span selectedCountLabel;
+    private Span modeInfoLabel;
     private Button relocateButton;
 
     private Consumer<Void> onRelocated;
@@ -47,13 +57,21 @@ public class UmlagernDialog extends Dialog {
     public UmlagernDialog(StockyardDTO sourceStockyard,
                           IngotService ingotService,
                           StockyardService stockyardService) {
+        this(sourceStockyard, ingotService, stockyardService, null);
+    }
+
+    public UmlagernDialog(StockyardDTO sourceStockyard,
+                          IngotService ingotService,
+                          StockyardService stockyardService,
+                          PlcService plcService) {
         this.sourceStockyard = sourceStockyard;
         this.ingotService = ingotService;
         this.stockyardService = stockyardService;
+        this.plcService = plcService;
 
         setHeaderTitle("Umlagern von " + sourceStockyard.getYardNumber());
         setWidth("700px");
-        setHeight("550px");
+        setHeight("620px");
         setModal(true);
         setDraggable(true);
         setCloseOnOutsideClick(false);
@@ -86,7 +104,65 @@ public class UmlagernDialog extends Dialog {
         content.add(new H4("Ziel auswählen"));
         content.add(createDestinationComboBox());
 
+        content.add(new Hr());
+
+        // Modus-Auswahl (Kran oder nur Datenbank)
+        content.add(new H4("Umlagern-Modus"));
+        content.add(createModeSelector());
+
         add(content);
+    }
+
+    private VerticalLayout createModeSelector() {
+        VerticalLayout layout = new VerticalLayout();
+        layout.setPadding(false);
+        layout.setSpacing(true);
+
+        modeSelector = new RadioButtonGroup<>();
+        modeSelector.setItems(MODE_CRANE, MODE_DATABASE);
+
+        // Standard: Kran wenn PlcService verfügbar und verbunden/Simulator aktiv
+        boolean craneAvailable = plcService != null &&
+            (plcService.isConnected() || plcService.isSimulatorMode());
+
+        if (craneAvailable) {
+            modeSelector.setValue(MODE_CRANE);
+        } else {
+            modeSelector.setValue(MODE_DATABASE);
+            modeSelector.setItemEnabledProvider(item ->
+                !MODE_CRANE.equals(item) || craneAvailable);
+        }
+
+        modeSelector.addValueChangeListener(e -> updateModeInfo());
+
+        // Info-Label
+        modeInfoLabel = new Span();
+        modeInfoLabel.getStyle().set("font-size", "12px");
+        updateModeInfo();
+
+        layout.add(modeSelector, modeInfoLabel);
+        return layout;
+    }
+
+    private void updateModeInfo() {
+        if (modeSelector == null || modeInfoLabel == null) return;
+
+        String mode = modeSelector.getValue();
+        if (MODE_CRANE.equals(mode)) {
+            if (plcService != null && plcService.isSimulatorMode()) {
+                modeInfoLabel.setText("Der Kran-Simulator bewegt den Barren physisch.");
+                modeInfoLabel.getStyle().set("color", "#FF9800");
+            } else if (plcService != null && plcService.isConnected()) {
+                modeInfoLabel.setText("Der echte Kran bewegt den Barren physisch.");
+                modeInfoLabel.getStyle().set("color", "#4CAF50");
+            } else {
+                modeInfoLabel.setText("Kran nicht verfügbar - bitte Simulator oder SPS aktivieren.");
+                modeInfoLabel.getStyle().set("color", "#F44336");
+            }
+        } else {
+            modeInfoLabel.setText("Nur Datenbank-Änderung, kein Kran-Befehl.");
+            modeInfoLabel.getStyle().set("color", "gray");
+        }
     }
 
     private Grid<IngotDTO> createIngotGrid() {
@@ -252,25 +328,90 @@ public class UmlagernDialog extends Dialog {
             return;
         }
 
+        String mode = modeSelector.getValue();
+
         try {
-            ingotService.relocate(topIngot.getId(), destination.getId());
-
-            Notification.show("Barren " + topIngot.getIngotNo() + " nach " + destination.getYardNumber() + " umgelagert",
-                3000, Notification.Position.BOTTOM_CENTER)
-                .addThemeVariants(NotificationVariant.LUMO_SUCCESS);
-
-            if (onRelocated != null) {
-                onRelocated.accept(null);
+            if (MODE_CRANE.equals(mode) && plcService != null) {
+                // Kran-Umlagern: Befehl an SPS/Simulator senden
+                executeCraneRelocation(destination);
+            } else {
+                // Nur Datenbank-Umlagern
+                executeDatabaseRelocation(destination);
             }
-
-            close();
-
         } catch (Exception e) {
             Notification.show("Fehler beim Umlagern: " + e.getMessage(),
                 5000, Notification.Position.MIDDLE)
                 .addThemeVariants(NotificationVariant.LUMO_ERROR);
             e.printStackTrace();
         }
+    }
+
+    /**
+     * Sendet einen Kran-Befehl zum physischen Umlagern
+     */
+    private void executeCraneRelocation(StockyardDTO destination) throws PlcException {
+        // Positionen ermitteln (mm)
+        int pickupX = sourceStockyard.getXPosition();
+        int pickupY = sourceStockyard.getYPosition();
+        int pickupZ = sourceStockyard.getZPosition();
+
+        int releaseX = destination.getXPosition();
+        int releaseY = destination.getYPosition();
+        int releaseZ = destination.getZPosition();
+
+        // Barren-Maße
+        int length = topIngot.getLength() != null ? topIngot.getLength() : 5000;
+        int width = topIngot.getWidth() != null ? topIngot.getWidth() : 500;
+        int thickness = topIngot.getThickness() != null ? topIngot.getThickness() : 200;
+        int weight = topIngot.getWeight() != null ? topIngot.getWeight() : 1500;
+
+        // PlcCommand erstellen
+        PlcCommand cmd = PlcCommand.builder()
+            .pickupPosition(pickupX, pickupY, pickupZ)
+            .releasePosition(releaseX, releaseY, releaseZ)
+            .dimensions(length, width, thickness)
+            .weight(weight)
+            .longIngot(length > 6000)
+            .rotate(false)
+            .build();
+
+        // An PLC senden
+        plcService.sendCommand(cmd);
+
+        // Auch in Datenbank umlagern (für Konsistenz)
+        ingotService.relocate(topIngot.getId(), destination.getId());
+
+        String modeText = plcService.isSimulatorMode() ? "Simulator" : "SPS";
+        Notification.show(
+            String.format("Kran-Befehl gesendet (%s): %s → %s",
+                modeText, sourceStockyard.getYardNumber(), destination.getYardNumber()),
+            5000, Notification.Position.BOTTOM_CENTER)
+            .addThemeVariants(NotificationVariant.LUMO_SUCCESS);
+
+        if (onRelocated != null) {
+            onRelocated.accept(null);
+        }
+
+        close();
+    }
+
+    /**
+     * Lagert nur in der Datenbank um (ohne Kran)
+     */
+    private void executeDatabaseRelocation(StockyardDTO destination) {
+        ingotService.relocate(topIngot.getId(), destination.getId());
+
+        Notification.show(
+            String.format("Barren %s nach %s umgelagert (nur DB)",
+                topIngot.getIngotNo(), destination.getYardNumber()),
+            3000, Notification.Position.BOTTOM_CENTER)
+            .addThemeVariants(NotificationVariant.LUMO_SUCCESS);
+
+        if (onRelocated != null) {
+            onRelocated.accept(null);
+        }
+
+        close();
     }
 
     public void setOnRelocated(Consumer<Void> onRelocated) {
