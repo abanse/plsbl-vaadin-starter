@@ -37,8 +37,8 @@ public class LagerGrid extends Div {
     // Grid-Konfiguration (basierend auf Original)
     private int columns = 17;  // X-Koordinaten 17-1
     private int rows = 10;     // Y-Koordinaten 10-1
-    private static final int CELL_WIDTH = 55;
-    private static final int CELL_HEIGHT = 45;
+    private static final int CELL_WIDTH = 75;   // Breite für rechteckige Barren
+    private static final int CELL_HEIGHT = 38;  // Höhe für rechteckige Barren
     private static final int GAP = 3;
     private static final int FENCE_WIDTH = 6;
     private static final int FENCE_GAP = 12;  // Abstand zwischen Zaun und Plätzen
@@ -441,23 +441,13 @@ public class LagerGrid extends Div {
             .set("grid-row", "2 / 17");
         add(rightFence);
 
-        // ============ GEMEINSAMER ZAUN (Reihe 16) ============
+        // ============ GEMEINSAMER ZAUN (Reihe 16) - beginnt bei Spalte 11 (rechts von 11/01) ============
 
-        // Zaun Spalte 10-11 (bei X=11, linker Teil bis zum Tor)
-        Div bottomFence2a = createFenceSegment();
-        bottomFence2a.getStyle()
-            .set("grid-column", "10 / 12")
-            .set("grid-row", "16")
-            .set("margin-right", "20px");
-        add(bottomFence2a);
-
-        // Tor bei Spalte 11 (X=10)
+        // Tor bei Spalte 11 (über X=10, rechts von 11/01)
         Div torSpalte11 = createGate();
         torSpalte11.getStyle()
             .set("grid-column", "11")
-            .set("grid-row", "16")
-            .set("width", "20px")
-            .set("justify-self", "end");
+            .set("grid-row", "16");
         add(torSpalte11);
 
         // Zaun von Spalte 12 bis zu den Toren (Spalte 12-21)
