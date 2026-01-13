@@ -3,6 +3,7 @@ package com.hydro.plsbl.ui.dialog;
 import com.hydro.plsbl.dto.IngotDTO;
 import com.hydro.plsbl.dto.StockyardDTO;
 import com.hydro.plsbl.dto.StockyardStatusDTO;
+import com.hydro.plsbl.entity.enums.StockyardUsage;
 import com.hydro.plsbl.service.IngotService;
 import com.hydro.plsbl.service.StockyardService;
 import com.vaadin.flow.component.button.Button;
@@ -43,6 +44,8 @@ public class StockyardInfoDialog extends Dialog {
     private Consumer<StockyardDTO> onForceDelete;
     private Consumer<IngotDTO> onIngotEdit;
     private Consumer<Void> onRelocated;
+    private Consumer<StockyardDTO> onMerge;
+    private Consumer<StockyardDTO> onSplit;
     private Grid<IngotDTO> ingotGrid;
 
     public StockyardInfoDialog(StockyardDTO stockyard, IngotService ingotService,
@@ -354,6 +357,24 @@ public class StockyardInfoDialog extends Dialog {
         Span spacer = new Span();
         spacer.getStyle().set("flex-grow", "1");
 
+        // Merge/Split Buttons
+        Button mergeButton = new Button("Zusammenfügen", VaadinIcon.CONNECT.create());
+        mergeButton.setEnabled(canMerge());
+        mergeButton.getElement().setAttribute("title",
+            "Zwei benachbarte kurze Plätze zu einem langen zusammenfügen");
+        mergeButton.addClickListener(e -> {
+            if (onMerge != null) {
+                onMerge.accept(stockyard);
+            }
+            close();
+        });
+
+        Button splitButton = new Button("Teilen", VaadinIcon.SPLIT.create());
+        splitButton.setEnabled(canSplit());
+        splitButton.getElement().setAttribute("title",
+            "Langen Platz in zwei kurze Plätze teilen");
+        splitButton.addClickListener(e -> confirmSplit());
+
         // Aktions-Buttons (rechts)
         Button relocateButton = new Button("Umlagern", VaadinIcon.EXCHANGE.create());
         relocateButton.setEnabled(stockyard.getStatus() != null && !stockyard.getStatus().isEmpty());
@@ -371,10 +392,47 @@ public class StockyardInfoDialog extends Dialog {
         Button closeButton = new Button("Schließen", VaadinIcon.CLOSE.create());
         closeButton.addClickListener(e -> close());
 
-        HorizontalLayout footer = new HorizontalLayout(deleteButton, spacer, relocateButton, editButton, closeButton);
+        HorizontalLayout footer = new HorizontalLayout(
+            deleteButton, spacer, mergeButton, splitButton, relocateButton, editButton, closeButton);
         footer.setWidthFull();
 
         getFooter().add(footer);
+    }
+
+    private boolean canMerge() {
+        // Kann zusammengefügt werden wenn: SHORT und leer
+        return stockyard.getUsage() == StockyardUsage.SHORT
+            && (stockyard.getStatus() == null || stockyard.getStatus().isEmpty());
+    }
+
+    private boolean canSplit() {
+        // Kann geteilt werden wenn: LONG, leer, und mindestens eine Nachbarposition frei
+        // Nutze Service-Methode für vollständige Prüfung inkl. Nachbarpositionen
+        if (stockyardService != null) {
+            return stockyardService.canSplit(stockyard.getId());
+        }
+        // Fallback: nur lokale Prüfung
+        return stockyard.getUsage() == StockyardUsage.LONG
+            && (stockyard.getStatus() == null || stockyard.getStatus().isEmpty());
+    }
+
+    private void confirmSplit() {
+        ConfirmDialog confirm = new ConfirmDialog();
+        confirm.setHeader("Lagerplatz teilen?");
+        confirm.setText("Der lange Lagerplatz " + stockyard.getYardNumber() +
+            " wird in zwei kurze Lagerplätze geteilt. " +
+            "Ein neuer Platz wird rechts (X+1) erstellt.");
+        confirm.setCancelable(true);
+        confirm.setCancelText("Abbrechen");
+        confirm.setConfirmText("Teilen");
+        confirm.setConfirmButtonTheme("primary");
+        confirm.addConfirmListener(e -> {
+            if (onSplit != null) {
+                onSplit.accept(stockyard);
+            }
+            close();
+        });
+        confirm.open();
     }
 
     private void confirmDelete() {
@@ -458,5 +516,13 @@ public class StockyardInfoDialog extends Dialog {
 
     public void setOnRelocated(Consumer<Void> onRelocated) {
         this.onRelocated = onRelocated;
+    }
+
+    public void setOnMerge(Consumer<StockyardDTO> onMerge) {
+        this.onMerge = onMerge;
+    }
+
+    public void setOnSplit(Consumer<StockyardDTO> onSplit) {
+        this.onSplit = onSplit;
     }
 }

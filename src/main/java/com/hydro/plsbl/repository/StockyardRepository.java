@@ -67,4 +67,26 @@ public interface StockyardRepository extends CrudRepository<Stockyard, Long> {
      */
     @Query("SELECT * FROM MD_STOCKYARD WHERE TO_STOCK_ALLOWED = 1 ORDER BY YARD_NO")
     List<Stockyard> findAvailableDestinations();
+
+    /**
+     * Findet benachbarte kurze Lagerplätze für Merge-Operation.
+     * Benachbart bedeutet: gleiche Y-Koordinate, X-Koordinate +1 oder -1.
+     */
+    @Query("""
+        SELECT * FROM MD_STOCKYARD
+        WHERE Y_COORDINATE = :y
+        AND X_COORDINATE IN (:xMinus1, :xPlus1)
+        AND YARD_USAGE = 'S'
+    """)
+    List<Stockyard> findAdjacentShortStockyards(
+        @Param("y") int y,
+        @Param("xMinus1") int xMinus1,
+        @Param("xPlus1") int xPlus1
+    );
+
+    /**
+     * Zählt Lagerplätze an einer bestimmten Koordinate (für Split-Validierung)
+     */
+    @Query("SELECT COUNT(*) FROM MD_STOCKYARD WHERE X_COORDINATE = :x AND Y_COORDINATE = :y")
+    int countByCoordinates(@Param("x") int x, @Param("y") int y);
 }

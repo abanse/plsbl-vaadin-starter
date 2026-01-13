@@ -16,6 +16,7 @@ import com.hydro.plsbl.ui.component.LagerGrid;
 import com.hydro.plsbl.ui.dialog.IngotEditDialog;
 import com.hydro.plsbl.ui.dialog.StockyardEditDialog;
 import com.hydro.plsbl.ui.dialog.StockyardInfoDialog;
+import com.hydro.plsbl.ui.dialog.StockyardMergeDialog;
 import com.vaadin.flow.component.AttachEvent;
 import com.vaadin.flow.component.DetachEvent;
 import com.vaadin.flow.component.UI;
@@ -403,6 +404,8 @@ public class LagerView extends VerticalLayout {
         dialog.setOnForceDelete(this::forceDeleteStockyard);
         dialog.setOnIngotEdit(this::openIngotEditDialog);
         dialog.setOnRelocated(v -> loadData()); // Nach Umlagern Grid aktualisieren
+        dialog.setOnMerge(this::openMergeDialog); // Merge-Dialog öffnen
+        dialog.setOnSplit(this::splitStockyard); // Split direkt ausführen
         dialog.open();
     }
 
@@ -585,6 +588,47 @@ public class LagerView extends VerticalLayout {
             }
         });
         editDialog.open();
+    }
+
+    /**
+     * Öffnet den Dialog zum Zusammenfügen von Lagerplätzen
+     */
+    private void openMergeDialog(StockyardDTO stockyard) {
+        log.debug("Opening merge dialog for: {}", stockyard.getYardNumber());
+
+        StockyardMergeDialog mergeDialog = new StockyardMergeDialog(stockyard, stockyardService);
+        mergeDialog.setOnMerged(merged -> {
+            loadData(); // Grid aktualisieren
+            log.info("Stockyards merged into: {}", merged.getYardNumber());
+        });
+        mergeDialog.open();
+    }
+
+    /**
+     * Führt die Split-Operation für einen Lagerplatz aus
+     */
+    private void splitStockyard(StockyardDTO stockyard) {
+        log.debug("Splitting stockyard: {}", stockyard.getYardNumber());
+
+        try {
+            StockyardDTO[] result = stockyardService.splitStockyard(stockyard.getId());
+            loadData(); // Grid aktualisieren
+
+            log.info("Stockyard {} split into {} and {}",
+                stockyard.getYardNumber(), result[0].getYardNumber(), result[1].getYardNumber());
+
+            com.vaadin.flow.component.notification.Notification
+                .show("Lagerplatz geteilt: " + result[0].getYardNumber() + " + " + result[1].getYardNumber(),
+                    3000, com.vaadin.flow.component.notification.Notification.Position.BOTTOM_CENTER)
+                .addThemeVariants(com.vaadin.flow.component.notification.NotificationVariant.LUMO_SUCCESS);
+
+        } catch (Exception e) {
+            log.error("Error splitting stockyard", e);
+            com.vaadin.flow.component.notification.Notification
+                .show("Fehler beim Teilen: " + e.getMessage(),
+                    5000, com.vaadin.flow.component.notification.Notification.Position.MIDDLE)
+                .addThemeVariants(com.vaadin.flow.component.notification.NotificationVariant.LUMO_ERROR);
+        }
     }
 
     // ========================================================================

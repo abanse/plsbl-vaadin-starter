@@ -3,6 +3,7 @@ package com.hydro.plsbl.ui.component;
 import com.hydro.plsbl.dto.StockyardDTO;
 import com.hydro.plsbl.dto.StockyardStatusDTO;
 import com.hydro.plsbl.entity.enums.StockyardType;
+import com.hydro.plsbl.entity.enums.StockyardUsage;
 import com.hydro.plsbl.service.SettingsService;
 import com.vaadin.flow.component.html.Div;
 import com.vaadin.flow.component.html.Span;
@@ -262,9 +263,18 @@ public class LagerGrid extends Div {
                 gridRow = 17;  // Nach unten verschieben
             }
 
-            button.getStyle()
-                .set("grid-column", String.valueOf(gridCol))
-                .set("grid-row", String.valueOf(gridRow));
+            // LONG Lagerplätze über 2 Spalten spannen
+            boolean isLong = yard.getUsage() == StockyardUsage.LONG;
+            if (isLong) {
+                // LONG: Span über 2 Spalten (nach rechts, also niedrigere X-Koordinaten)
+                button.getStyle()
+                    .set("grid-column", gridCol + " / " + (gridCol + 2))
+                    .set("grid-row", String.valueOf(gridRow));
+            } else {
+                button.getStyle()
+                    .set("grid-column", String.valueOf(gridCol))
+                    .set("grid-row", String.valueOf(gridRow));
+            }
 
             add(button);
             buttonMap.put(yard.getId(), button);
@@ -1044,10 +1054,15 @@ public class LagerGrid extends Div {
 
         public StockyardButton(StockyardDTO stockyard, SettingsService settingsService) {
             this.settingsService = settingsService;
-            setWidth(CELL_WIDTH + "px");
+
+            // LONG Lagerplätze doppelt so breit (2 * CELL_WIDTH + GAP)
+            boolean isLong = stockyard.getUsage() == StockyardUsage.LONG;
+            int buttonWidth = isLong ? (2 * CELL_WIDTH + GAP) : CELL_WIDTH;
+
+            setWidth(buttonWidth + "px");
             setHeight(CELL_HEIGHT + "px");
             getStyle()
-                .set("min-width", CELL_WIDTH + "px")
+                .set("min-width", buttonWidth + "px")
                 .set("padding", "2px")
                 .set("border-radius", "4px")
                 .set("cursor", "pointer")
