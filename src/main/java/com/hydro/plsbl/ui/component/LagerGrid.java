@@ -285,6 +285,7 @@ public class LagerGrid extends Div {
     /**
      * Fügt die Säge oben rechts hinzu, bis zur Zaun-Lücke reichend
      * Wenn ein Säge-Lagerplatz vorhanden ist, wird er als interaktiver Button angezeigt
+     * Unten wird eine Lichtschranke angezeigt (grün = Einlagerung erlaubt)
      */
     private void addSaegeausgang(StockyardDTO sawYard) {
         // Säge-Container - Reihe 1-3, Spalte 21-22 (kürzer, nicht bis zu den Lagerplätzen)
@@ -297,14 +298,15 @@ public class LagerGrid extends Div {
             .set("display", "flex")
             .set("flex-direction", "column")
             .set("align-items", "center")
-            .set("justify-content", "stretch");
+            .set("justify-content", "flex-start")
+            .set("gap", "4px");
 
         if (sawYard != null) {
-            // Interaktiver Säge-Button mit Barren-Anzeige (volle Höhe bis Zaun)
+            // Interaktiver Säge-Button mit Barren-Anzeige
             StockyardButton sawButton = new StockyardButton(sawYard, settingsService);
             sawButton.getStyle()
                 .set("width", "65px")
-                .set("height", "100%")
+                .set("flex", "1")
                 .set("border", "2px solid #0D47A1")
                 .set("background", "linear-gradient(135deg, #1565C0 0%, #42A5F5 100%)")
                 .set("color", "white");
@@ -319,23 +321,48 @@ public class LagerGrid extends Div {
             saegeContainer.add(sawButton);
             buttonMap.put(sawYard.getId(), sawButton);
 
+            // Lichtschranke unten - grün wenn Einlagerung erlaubt
+            Div lichtschranke = new Div();
+            boolean einlagerungErlaubt = sawYard.isToStockAllowed();
+            lichtschranke.getStyle()
+                .set("width", "65px")
+                .set("height", "8px")
+                .set("border-radius", "4px")
+                .set("background-color", einlagerungErlaubt ? "#4CAF50" : "#F44336")  // Grün oder Rot
+                .set("box-shadow", einlagerungErlaubt
+                    ? "0 0 8px #4CAF50, 0 0 12px #4CAF50"   // Grünes Leuchten
+                    : "0 0 8px #F44336, 0 0 12px #F44336"); // Rotes Leuchten
+            lichtschranke.getElement().setAttribute("title",
+                einlagerungErlaubt ? "Einlagerung erlaubt" : "Einlagerung gesperrt");
+            saegeContainer.add(lichtschranke);
+
             // Debug-Info
             String ingotInfo = sawYard.getStatus() != null && sawYard.getStatus().getIngotNumber() != null
                 ? sawYard.getStatus().getIngotNumber()
                 : "kein Barren";
             int count = sawYard.getStatus() != null ? sawYard.getStatus().getIngotsCount() : 0;
-            log.info("SAW position: {} - Barren: {}, Anzahl: {}", sawYard.getYardNumber(), ingotInfo, count);
+            log.info("SAW position: {} - Barren: {}, Anzahl: {}, Einlagerung: {}",
+                sawYard.getYardNumber(), ingotInfo, count, einlagerungErlaubt ? "erlaubt" : "gesperrt");
         } else {
             // Fallback: Statisches Säge-Symbol (kein Stockyard definiert)
             Div saege = new Div();
             saege.getStyle()
                 .set("width", "65px")
-                .set("height", "100%")
+                .set("flex", "1")
                 .set("background", "linear-gradient(90deg, #1565C0 0%, #1565C0 15%, #90CAF9 15%, #90CAF9 30%, #1565C0 30%, #1565C0 45%, #90CAF9 45%, #90CAF9 60%, #1565C0 60%, #1565C0 75%, #90CAF9 75%, #90CAF9 90%, #1565C0 90%)")
                 .set("border-radius", "4px")
                 .set("border", "2px solid #0D47A1");
-
             saegeContainer.add(saege);
+
+            // Lichtschranke (Standard: rot)
+            Div lichtschranke = new Div();
+            lichtschranke.getStyle()
+                .set("width", "65px")
+                .set("height", "8px")
+                .set("border-radius", "4px")
+                .set("background-color", "#F44336")
+                .set("box-shadow", "0 0 8px #F44336, 0 0 12px #F44336");
+            saegeContainer.add(lichtschranke);
         }
 
         add(saegeContainer);
@@ -369,7 +396,7 @@ public class LagerGrid extends Div {
         add(topFence1);
 
         // Tor 1 oben (Spalte 4) - oberhalb von Platz 17/10
-        Div topGate1 = createGate();
+        Div topGate1 = createNumberedGate(1, "Oben bei 17/10");
         topGate1.getStyle()
             .set("grid-column", "4")
             .set("grid-row", "2");
@@ -383,7 +410,7 @@ public class LagerGrid extends Div {
         add(topFence2);
 
         // Tor 2 oben (Spalte 11) - oberhalb von Platz 10/10
-        Div topGate2 = createGate();
+        Div topGate2 = createNumberedGate(2, "Oben bei 10/10");
         topGate2.getStyle()
             .set("grid-column", "11")
             .set("grid-row", "2");
@@ -407,7 +434,7 @@ public class LagerGrid extends Div {
         add(topFence3c);
 
         // Tor 3 oberhalb von Platz 00/08 (Spalte 24)
-        Div topGate3 = createGate();
+        Div topGate3 = createNumberedGate(3, "Oben bei 00/08");
         topGate3.getStyle()
             .set("grid-column", "24")
             .set("grid-row", "2");
@@ -443,8 +470,8 @@ public class LagerGrid extends Div {
 
         // ============ GEMEINSAMER ZAUN (Reihe 16) - beginnt bei Spalte 11 (rechts von 11/01) ============
 
-        // Tor bei Spalte 11 (über X=10, rechts von 11/01)
-        Div torSpalte11 = createGate();
+        // Tor 4 bei Spalte 11 (über X=10, rechts von 11/01)
+        Div torSpalte11 = createNumberedGate(4, "Mitte rechts von 11/01");
         torSpalte11.getStyle()
             .set("grid-column", "11")
             .set("grid-row", "16");
@@ -457,8 +484,8 @@ public class LagerGrid extends Div {
             .set("grid-row", "16");
         add(bottomFence2);
 
-        // Personen-Tor (Spalte 22)
-        Div personenTor = createGate();
+        // Tor 5: Personen-Tor (Spalte 22)
+        Div personenTor = createNumberedGate(5, "Personen-Tor");
         personenTor.getStyle()
             .set("grid-column", "22")
             .set("grid-row", "16");
@@ -471,8 +498,8 @@ public class LagerGrid extends Div {
             .set("grid-row", "16");
         add(zaunZwischenToren);
 
-        // Barren-Tor (Spalte 24-26)
-        Div barrenTor = createGate();
+        // Tor 6: Barren-Tor (Spalte 24-26)
+        Div barrenTor = createNumberedGate(6, "Barren-Tor");
         barrenTor.getStyle()
             .set("grid-column", "24 / 27")
             .set("grid-row", "16");
@@ -489,8 +516,8 @@ public class LagerGrid extends Div {
             .set("margin-right", "20px");  // Platz für das Tor lassen
         add(bottomFenceShiftedLeft);
 
-        // Tor unter Platz 17/01 (Spalte 4) - 20px breit, rechts ausgerichtet
-        Div torUnter1701 = createGate();
+        // Tor 7 unter Platz 17/01 (Spalte 4) - 20px breit, rechts ausgerichtet
+        Div torUnter1701 = createNumberedGate(7, "Unten bei 17/01");
         torUnter1701.getStyle()
             .set("grid-column", "4")
             .set("grid-row", "19")
@@ -531,8 +558,8 @@ public class LagerGrid extends Div {
             .set("align-self", "start");
         add(lVerticalTop);
 
-        // Einfahrt-Schranke (Reihe 17-20) - 70px hoch
-        Div einfahrtTor = createGate();
+        // Tor 8: Einfahrt-Schranke (Reihe 17-20) - 70px hoch
+        Div einfahrtTor = createNumberedGate(8, "Einfahrt Beladung");
         einfahrtTor.getStyle()
             .set("grid-column", String.valueOf(lFormStartCol))
             .set("grid-row", "17 / 21")
@@ -567,8 +594,8 @@ public class LagerGrid extends Div {
             .set("align-self", "start");
         add(leftBeladungTop);
 
-        // Ausfahrt-Schranke (Reihe 17-20) - 70px hoch
-        Div schranke = createGate();
+        // Tor 9: Ausfahrt-Schranke (Reihe 17-20) - 70px hoch
+        Div schranke = createNumberedGate(9, "Ausfahrt Beladung");
         schranke.getStyle()
             .set("grid-column", String.valueOf(beladungFenceCol))
             .set("grid-row", "17 / 21")
@@ -591,8 +618,8 @@ public class LagerGrid extends Div {
 
         // ============ UNTERER ZAUN DER BELADUNGSFLÄCHE (Reihe 21) ============
 
-        // Fahrer-Tor (links, auf Höhe der Zugkabine) - 20px breit
-        Div fahrerTor = createGate();
+        // Tor 10: Fahrer-Tor (links, auf Höhe der Zugkabine) - 20px breit
+        Div fahrerTor = createNumberedGate(10, "Fahrer-Tor");
         fahrerTor.getStyle()
             .set("grid-column", String.valueOf(beladungLeftCol))
             .set("grid-row", "21")
@@ -623,6 +650,31 @@ public class LagerGrid extends Div {
         gate.getStyle()
             .set("background-color", "#4CAF50") // Grün
             .set("border-radius", "2px");
+        return gate;
+    }
+
+    /**
+     * Erstellt ein nummeriertes Tor mit Label
+     */
+    private Div createNumberedGate(int number, String beschreibung) {
+        Div gate = new Div();
+        gate.getStyle()
+            .set("background-color", "#4CAF50") // Grün
+            .set("border-radius", "2px")
+            .set("display", "flex")
+            .set("align-items", "center")
+            .set("justify-content", "center")
+            .set("position", "relative");
+
+        Span label = new Span("T" + number);
+        label.getStyle()
+            .set("font-size", "9px")
+            .set("font-weight", "bold")
+            .set("color", "white")
+            .set("text-shadow", "0 0 2px black");
+        gate.add(label);
+
+        gate.getElement().setAttribute("title", "Tor " + number + ": " + beschreibung);
         return gate;
     }
 
