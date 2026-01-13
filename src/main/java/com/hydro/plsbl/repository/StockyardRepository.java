@@ -28,10 +28,10 @@ public interface StockyardRepository extends CrudRepository<Stockyard, Long> {
     
     /**
      * Findet alle Lagerplätze die in der StockView angezeigt werden sollen
-     * (Intern, Extern, Verladung, Säge) - nur im gültigen Koordinatenbereich (1-17, 1-10)
-     * Säge-Position wird separat behandelt (außerhalb des Grids)
+     * (Intern, Extern, Verladung) im Koordinatenbereich (1-17, 1-10)
+     * PLUS Säge-Plätze (beliebige Koordinaten, da außerhalb des Grids)
      */
-    @Query("SELECT * FROM MD_STOCKYARD WHERE YARD_TYPE IN ('I', 'E', 'L', 'S') AND X_COORDINATE BETWEEN 1 AND 17 AND Y_COORDINATE BETWEEN 1 AND 10 ORDER BY Y_COORDINATE DESC, X_COORDINATE")
+    @Query("SELECT * FROM MD_STOCKYARD WHERE (YARD_TYPE IN ('I', 'E', 'L') AND X_COORDINATE BETWEEN 1 AND 17 AND Y_COORDINATE BETWEEN 1 AND 10) OR YARD_TYPE = 'S' ORDER BY Y_COORDINATE DESC, X_COORDINATE")
     List<Stockyard> findAllForStockView();
     
     /**

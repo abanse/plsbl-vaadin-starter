@@ -58,6 +58,8 @@ public class LagerView extends VerticalLayout {
 
     // Kran-Update-Intervall in Sekunden
     private static final int CRANE_UPDATE_INTERVAL = 1;
+    // Daten-Refresh-Intervall in Sekunden (für Stockyard-Daten)
+    private static final int DATA_REFRESH_INTERVAL = 3;
 
     private final StockyardService stockyardService;
     private final IngotService ingotService;
@@ -72,6 +74,7 @@ public class LagerView extends VerticalLayout {
     // Kran-Polling
     private ScheduledExecutorService craneUpdateExecutor;
     private ScheduledFuture<?> craneUpdateFuture;
+    private int dataRefreshCounter = 0;  // Zähler für Daten-Refresh
 
     // Simulator-Umlagern Modus
     private boolean relocateMode = false;
@@ -326,7 +329,64 @@ public class LagerView extends VerticalLayout {
             add(error);
         }
     }
-    
+
+    /**
+     * Aktualisiert die Stockyard-Daten ohne das Grid neu zu bauen.
+     * Nur die Buttons mit geänderten Daten werden aktualisiert.
+     */
+    private void refreshStockyardData() {
+        try {
+            Map<Long, StockyardDTO> newData = stockyardService.findAllForStockView();
+
+            // Nur aktualisieren wenn Daten vorhanden
+            if (newData.isEmpty()) return;
+
+            // Bestehende Buttons aktualisieren
+            for (Map.Entry<Long, StockyardDTO> entry : newData.entrySet()) {
+                Long id = entry.getKey();
+                StockyardDTO newYard = entry.getValue();
+                StockyardDTO oldYard = allStockyards.get(id);
+
+                // Prüfen ob sich etwas geändert hat
+                if (oldYard == null || hasStatusChanged(oldYard, newYard)) {
+                    // Button aktualisieren
+                    lagerGrid.updateStockyard(newYard);
+                    log.debug("Stockyard {} updated", newYard.getYardNumber());
+                }
+            }
+
+            // Cache aktualisieren
+            allStockyards = newData;
+
+        } catch (Exception e) {
+            log.debug("Error refreshing stockyard data: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * Prüft ob sich der Status eines Stockyards geändert hat
+     */
+    private boolean hasStatusChanged(StockyardDTO oldYard, StockyardDTO newYard) {
+        var oldStatus = oldYard.getStatus();
+        var newStatus = newYard.getStatus();
+
+        // Beide null -> keine Änderung
+        if (oldStatus == null && newStatus == null) return false;
+        // Einer null -> Änderung
+        if (oldStatus == null || newStatus == null) return true;
+
+        // Anzahl vergleichen
+        if (oldStatus.getIngotsCount() != newStatus.getIngotsCount()) return true;
+
+        // Barren-Nummer vergleichen (für SAW-Plätze)
+        String oldIngot = oldStatus.getIngotNumber();
+        String newIngot = newStatus.getIngotNumber();
+        if (oldIngot == null && newIngot != null) return true;
+        if (oldIngot != null && !oldIngot.equals(newIngot)) return true;
+
+        return false;
+    }
+
     private void onStockyardClicked(StockyardDTO stockyard) {
         log.debug("Stockyard clicked: {}", stockyard.getYardNumber());
 
@@ -532,7 +592,7 @@ public class LagerView extends VerticalLayout {
     // ========================================================================
 
     /**
-     * Startet die periodischen Kran-Updates
+     * Startet die periodischen Kran-Updates und Daten-Refresh
      */
     private void startCraneUpdates(UI ui) {
         if (craneUpdateExecutor != null) {
@@ -542,13 +602,23 @@ public class LagerView extends VerticalLayout {
         craneUpdateExecutor = Executors.newSingleThreadScheduledExecutor();
         craneUpdateFuture = craneUpdateExecutor.scheduleAtFixedRate(() -> {
             try {
-                ui.access(this::loadCraneStatus);
+                ui.access(() -> {
+                    // Kran-Status immer aktualisieren
+                    loadCraneStatus();
+
+                    // Stockyard-Daten periodisch aktualisieren
+                    dataRefreshCounter++;
+                    if (dataRefreshCounter >= DATA_REFRESH_INTERVAL) {
+                        dataRefreshCounter = 0;
+                        refreshStockyardData();
+                    }
+                });
             } catch (Exception e) {
-                log.debug("Crane update skipped: {}", e.getMessage());
+                log.debug("Update skipped: {}", e.getMessage());
             }
         }, CRANE_UPDATE_INTERVAL, CRANE_UPDATE_INTERVAL, TimeUnit.SECONDS);
 
-        log.info("Crane updates started (interval: {}s)", CRANE_UPDATE_INTERVAL);
+        log.info("Crane updates started (interval: {}s, data refresh: {}s)", CRANE_UPDATE_INTERVAL, DATA_REFRESH_INTERVAL);
     }
 
     /**

@@ -60,13 +60,21 @@ public class StockyardService {
         
         for (Stockyard yard : stockyards) {
             StockyardDTO dto = toDTO(yard);
-            
+
             // Status hinzufügen
             StockyardStatus status = statusMap.get(yard.getId());
             if (status != null) {
                 dto.setStatus(toStatusDTO(status, yard.getMaxIngots()));
             }
-            
+
+            // Debug für SAW-Plätze
+            if (yard.getType() == com.hydro.plsbl.entity.enums.StockyardType.SAW) {
+                log.info("SAW stockyard loaded: {} (ID={}) - hasStatus={}, ingotsCount={}",
+                    yard.getYardNumber(), yard.getId(),
+                    status != null,
+                    status != null ? status.getIngotsCount() : 0);
+            }
+
             result.put(dto.getId(), dto);
         }
         
@@ -319,7 +327,7 @@ public class StockyardService {
         dto.setEmpty(status.getIngotsCount() == 0);
         dto.setFull(status.getIngotsCount() >= maxIngots);
         dto.setNeighborId(status.getNeighborId());
-        
+
         // Produkt-Nummer laden (optional)
         if (status.getProductId() != null) {
             try {
@@ -333,7 +341,22 @@ public class StockyardService {
                 // Produkt nicht gefunden - ignorieren
             }
         }
-        
+
+        // Barren-Nummer laden (für alle Plätze mit Barren, z.B. SAW-Plätze)
+        if (status.getIngotsCount() > 0) {
+            try {
+                String ingotNo = jdbcTemplate.queryForObject(
+                    "SELECT INGOT_NO FROM TD_INGOT WHERE STOCKYARD_ID = ? ORDER BY PILE_POSITION DESC FETCH FIRST 1 ROWS ONLY",
+                    String.class,
+                    status.getStockyardId()
+                );
+                dto.setIngotNumber(ingotNo);
+            } catch (Exception e) {
+                log.debug("Ingot number not found for stockyard {}: {}",
+                    status.getStockyardId(), e.getMessage());
+            }
+        }
+
         return dto;
     }
     

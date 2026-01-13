@@ -155,9 +155,11 @@ public class IngotStorageService {
         // 2. Saege-Position finden
         Stockyard sawPosition = findSawPosition()
             .orElseThrow(() -> new IllegalStateException("Keine Saege-Position konfiguriert!"));
+        log.info("SAW Position gefunden: {} (ID={})", sawPosition.getYardNumber(), sawPosition.getId());
 
         // 3. Barren erstellen
         IngotDTO ingot = createIngot(message, productId, sawPosition.getId());
+        log.info("Barren erstellt auf SAW: ingotNo={}, stockyardId={}", ingot.getIngotNo(), ingot.getStockyardId());
 
         // 4. Ziel-Lagerplatz finden
         Stockyard targetYard = findTargetStockyard(productId, null)

@@ -156,10 +156,11 @@ public class IngotService {
         entity.setReleasedSince(dto.getReleasedSince());
 
         Ingot saved = ingotRepository.save(entity);
-        log.info("Ingot saved with ID: {}", saved.getId());
+        log.info("Ingot saved: ID={}, ingotNo={}, stockyardId={}", saved.getId(), saved.getIngotNo(), saved.getStockyardId());
 
         // StockyardStatus aktualisieren wenn neuer Barren erstellt wurde
         if (isNewIngot && dto.getStockyardId() != null) {
+            log.info("Updating StockyardStatus for new ingot on stockyard {}", dto.getStockyardId());
             updateStockyardStatusForNewIngot(dto.getStockyardId(), dto.getProductId());
         }
 
@@ -170,6 +171,7 @@ public class IngotService {
      * Aktualisiert StockyardStatus wenn ein neuer Barren erstellt wird
      */
     private void updateStockyardStatusForNewIngot(Long stockyardId, Long productId) {
+        log.info("updateStockyardStatusForNewIngot called: stockyardId={}, productId={}", stockyardId, productId);
         Optional<StockyardStatus> existingStatus = stockyardStatusRepository.findByStockyardId(stockyardId);
         if (existingStatus.isPresent()) {
             // Anzahl erhöhen
@@ -178,7 +180,7 @@ public class IngotService {
             jdbcTemplate.update(
                 "UPDATE TD_STOCKYARDSTATUS SET INGOTS_COUNT = ?, SERIAL = SERIAL + 1 WHERE ID = ?",
                 newCount, status.getId());
-            log.debug("StockyardStatus updated for stockyard {}: count={}", stockyardId, newCount);
+            log.info("StockyardStatus UPDATED for stockyard {}: count={}", stockyardId, newCount);
         } else {
             // Neuen Status erstellen
             Long newId = getNextStatusId();
@@ -186,7 +188,7 @@ public class IngotService {
             jdbcTemplate.update(
                 "INSERT INTO TD_STOCKYARDSTATUS (ID, STOCKYARD_ID, PRODUCT_ID, INGOTS_COUNT, YARD_USAGE, PILE_HEIGHT, SERIAL) VALUES (?, ?, ?, 1, ?, 1, 1)",
                 newId, stockyardId, productId, yardUsage);
-            log.info("StockyardStatus created for stockyard {} with product {} and yardUsage={}", stockyardId, productId, yardUsage);
+            log.info("StockyardStatus CREATED for stockyard {} with ID={}, product={}, yardUsage={}", stockyardId, newId, productId, yardUsage);
         }
     }
 

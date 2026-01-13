@@ -198,6 +198,11 @@ public class LagerGrid extends Div {
 
         // Y-Achsen-Labels (links, Spalte 3) - Y=10 oben bis Y=1 unten
         for (int y = rows; y >= 1; y--) {
+            // Label "11" ausblenden (nicht benötigt)
+            if (y == 11) {
+                continue;
+            }
+
             Span label = new Span(String.format("%02d", y));
             int gridRow = rows - y + 5;  // Reihe 5-14
 
@@ -279,30 +284,31 @@ public class LagerGrid extends Div {
     }
 
     /**
-     * Fügt die Säge oben rechts hinzu (Reihe 1, Spalte 23)
+     * Fügt die Säge oben rechts hinzu, bis zur Zaun-Lücke reichend
      * Wenn ein Säge-Lagerplatz vorhanden ist, wird er als interaktiver Button angezeigt
      */
     private void addSaegeausgang(StockyardDTO sawYard) {
-        // Säge-Container - Reihe 1, Spalte 23
+        // Säge-Container - Reihe 1-2, Spalte 23 (bis zur Zaun-Lücke)
         Div saegeContainer = new Div();
         saegeContainer.addClassName("saege-container");
         saegeContainer.getStyle()
-            .set("grid-column", "23")     // Säge-Bereich
-            .set("grid-row", "1")         // Oben
+            .set("grid-column", "22 / 24")  // Säge-Bereich (halbe Strecke nach links)
+            .set("grid-row", "1 / 5")       // Von oben bis unter die X-Labels (richtig lang)
+            .set("margin-left", "-20px")    // Feineinstellung nach links
             .set("display", "flex")
             .set("flex-direction", "column")
             .set("align-items", "center")
-            .set("justify-content", "center")
-            .set("gap", "3px");
+            .set("justify-content", "stretch");
 
         if (sawYard != null) {
-            // Interaktiver Säge-Button mit Barren-Anzeige
+            // Interaktiver Säge-Button mit Barren-Anzeige (volle Höhe bis Zaun)
             StockyardButton sawButton = new StockyardButton(sawYard, settingsService);
             sawButton.getStyle()
                 .set("width", "65px")
-                .set("height", "45px")
+                .set("height", "100%")
                 .set("border", "2px solid #0D47A1")
-                .set("background", "linear-gradient(135deg, #1565C0 0%, #42A5F5 100%)");
+                .set("background", "linear-gradient(135deg, #1565C0 0%, #42A5F5 100%)")
+                .set("color", "white");
 
             // Click-Handler
             sawButton.addClickListener(e -> {
@@ -311,35 +317,26 @@ public class LagerGrid extends Div {
                 }
             });
 
-            // Label
-            Span label = new Span("Säge");
-            label.getStyle()
-                .set("font-size", "10px")
-                .set("font-weight", "bold")
-                .set("color", "#333");
-
-            saegeContainer.add(sawButton, label);
+            saegeContainer.add(sawButton);
             buttonMap.put(sawYard.getId(), sawButton);
 
-            log.info("Saw position added with stockyard data: {}", sawYard.getYardNumber());
+            // Debug-Info
+            String ingotInfo = sawYard.getStatus() != null && sawYard.getStatus().getIngotNumber() != null
+                ? sawYard.getStatus().getIngotNumber()
+                : "kein Barren";
+            int count = sawYard.getStatus() != null ? sawYard.getStatus().getIngotsCount() : 0;
+            log.info("SAW position: {} - Barren: {}, Anzahl: {}", sawYard.getYardNumber(), ingotInfo, count);
         } else {
             // Fallback: Statisches Säge-Symbol (kein Stockyard definiert)
             Div saege = new Div();
             saege.getStyle()
                 .set("width", "65px")
-                .set("height", "38px")
+                .set("height", "100%")
                 .set("background", "linear-gradient(90deg, #1565C0 0%, #1565C0 15%, #90CAF9 15%, #90CAF9 30%, #1565C0 30%, #1565C0 45%, #90CAF9 45%, #90CAF9 60%, #1565C0 60%, #1565C0 75%, #90CAF9 75%, #90CAF9 90%, #1565C0 90%)")
                 .set("border-radius", "4px")
                 .set("border", "2px solid #0D47A1");
 
-            // Label
-            Span label = new Span("Säge");
-            label.getStyle()
-                .set("font-size", "10px")
-                .set("font-weight", "bold")
-                .set("color", "#333");
-
-            saegeContainer.add(saege, label);
+            saegeContainer.add(saege);
         }
 
         add(saegeContainer);
@@ -394,40 +391,35 @@ public class LagerGrid extends Div {
             .set("grid-row", "2");
         add(topGate2);
 
-        // Zaun rechts bis zum Säge-Ausgang (Spalte 13-22)
+        // Zaun rechts bis zum Säge-Ausgang (Spalte 13-21, kürzer für SAW-Container)
         Div topFence3 = createFenceSegment();
         topFence3.getStyle()
-            .set("grid-column", "13 / 23")  // Bis Spalte 22 (vor Säge-Ausgang)
+            .set("grid-column", "13 / 22")  // Bis Spalte 21 (kürzer für SAW-Container)
             .set("grid-row", "2");
         add(topFence3);
 
         // Säge-Ausgang (Spalte 23, 70px breit - so breit wie die Säge)
         // OFFEN - kein Zaun hier, damit Barren von der Säge ins Lager kommen
 
-        // Zaun zwischen Säge-Ausgang und Tor 3 (nach rechts verschoben bis zu Tor 3)
+        // Zaun zwischen Säge-Ausgang und Tor 3 (länger um Lücke zu schließen)
         Div topFence3c = createFenceSegment();
         topFence3c.getStyle()
-            .set("grid-column", "23")
+            .set("grid-column", "23 / 25")  // Breiter: Spalte 23-24
             .set("grid-row", "2")
-            .set("width", "25px")
-            .set("justify-self", "end")
-            .set("margin-right", "-25px");  // Nach rechts verschieben bis zu Tor 3
+            .set("margin-left", "50px");    // Nach rechts vom SAW-Container
         add(topFence3c);
 
-        // Tor 3 oberhalb von Platz 00/08 (Spalte 24), nach rechts verschoben um Lücke zu schließen
+        // Tor 3 oberhalb von Platz 00/08 (Spalte 25)
         Div topGate3 = createGate();
         topGate3.getStyle()
-            .set("grid-column", "24")
-            .set("grid-row", "2")
-            .set("width", "30px")
-            .set("justify-self", "start")
-            .set("margin-left", "25px");  // Nach rechts verschieben um Lücke zu schließen
+            .set("grid-column", "25")
+            .set("grid-row", "2");
         add(topGate3);
 
-        // Zaun rechts von Tor 3 (Spalte 25-27)
+        // Zaun rechts von Tor 3 (Spalte 26-27)
         Div topFence4 = createFenceSegment();
         topFence4.getStyle()
-            .set("grid-column", "25 / 28")
+            .set("grid-column", "26 / 28")
             .set("grid-row", "2");
         add(topFence4);
 
@@ -1046,13 +1038,21 @@ public class LagerGrid extends Div {
 
             // Anzahl/Status setzen
             StockyardStatusDTO status = stockyard.getStatus();
+
             if (status == null || status.isEmpty()) {
                 countLabel.setText("-");
             } else {
-                String countText = String.valueOf(status.getIngotsCount());
-                if (status.isRevisedOnTop()) countText += "k";
-                if (status.isScrapOnTop()) countText += "s";
-                countLabel.setText(countText);
+                // Für SAW-Plätze: Barren-Nummer anzeigen statt Anzahl
+                if (stockyard.getType() == StockyardType.SAW && status.getIngotNumber() != null) {
+                    countLabel.setText(status.getIngotNumber());
+                    countLabel.getStyle().set("font-size", "10px");  // Kleinere Schrift für lange Nummern
+                } else {
+                    String countText = String.valueOf(status.getIngotsCount());
+                    if (status.isRevisedOnTop()) countText += "k";
+                    if (status.isScrapOnTop()) countText += "s";
+                    countLabel.setText(countText);
+                    countLabel.getStyle().set("font-size", "14px");  // Normale Schrift
+                }
             }
 
             // Farben basierend auf Status

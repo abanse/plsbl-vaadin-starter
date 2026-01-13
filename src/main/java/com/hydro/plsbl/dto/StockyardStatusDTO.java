@@ -11,7 +11,10 @@ public class StockyardStatusDTO {
     private String productNumber;
     private int ingotsCount;
     private Long neighborId;
-    
+
+    // Barren-Nummer (für SAW-Plätze mit einzelnem Barren)
+    private String ingotNumber;
+
     // Berechnete Felder
     private boolean empty;
     private boolean full;
@@ -100,7 +103,15 @@ public class StockyardStatusDTO {
     public void setScrapOnTop(boolean scrapOnTop) {
         this.scrapOnTop = scrapOnTop;
     }
-    
+
+    public String getIngotNumber() {
+        return ingotNumber;
+    }
+
+    public void setIngotNumber(String ingotNumber) {
+        this.ingotNumber = ingotNumber;
+    }
+
     @Override
     public String toString() {
         return "StockyardStatusDTO{" +
