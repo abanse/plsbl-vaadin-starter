@@ -160,11 +160,13 @@ public class LagerGrid extends Div {
             return;
         }
 
-        // Grid-Dimensionen ermitteln
+        // Grid-Dimensionen ermitteln (SAW-Plätze ausschließen, da außerhalb des Haupt-Grids)
         int maxX = stockyards.values().stream()
+            .filter(y -> y.getType() != StockyardType.SAW)
             .mapToInt(StockyardDTO::getXCoordinate)
             .max().orElse(17);
         int maxY = stockyards.values().stream()
+            .filter(y -> y.getType() != StockyardType.SAW)
             .mapToInt(StockyardDTO::getYCoordinate)
             .max().orElse(10);
 
