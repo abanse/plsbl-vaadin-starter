@@ -746,9 +746,11 @@ public class LagerGrid extends Div {
     private Div createTrailer() {
         // Trailer aus Vogelperspektive (wie die anderen Lagerplätze)
         // Kabine links, Ladefläche rechts (Trailer fährt nach links raus)
+        // Mit 4 schwarzen Rädern
         Div trailerContainer = new Div();
         trailerContainer.addClassName("trailer");
         trailerContainer.getStyle()
+            .set("position", "relative")
             .set("display", "flex")
             .set("flex-direction", "row")
             .set("align-items", "center")
@@ -790,7 +792,51 @@ public class LagerGrid extends Div {
 
         trailerContainer.add(kabine, ladeflaeche);
 
+        // 4 schwarze Räder hinzufügen (gut verteilt an der Ladefläche)
+        // Hintere Achse (am Ende der Ladefläche) - oben
+        Div wheel1 = createWheel();
+        wheel1.getStyle()
+            .set("position", "absolute")
+            .set("right", "20px")
+            .set("top", "-8px");
+        trailerContainer.add(wheel1);
+
+        // Hintere Achse - unten
+        Div wheel2 = createWheel();
+        wheel2.getStyle()
+            .set("position", "absolute")
+            .set("right", "20px")
+            .set("bottom", "-8px");
+        trailerContainer.add(wheel2);
+
+        // Vordere Achse (am Anfang der Ladefläche, nahe Kabine) - oben
+        Div wheel3 = createWheel();
+        wheel3.getStyle()
+            .set("position", "absolute")
+            .set("right", "115px")
+            .set("top", "-8px");
+        trailerContainer.add(wheel3);
+
+        // Vordere Achse - unten
+        Div wheel4 = createWheel();
+        wheel4.getStyle()
+            .set("position", "absolute")
+            .set("right", "115px")
+            .set("bottom", "-8px");
+        trailerContainer.add(wheel4);
+
         return trailerContainer;
+    }
+
+    private Div createWheel() {
+        Div wheel = new Div();
+        wheel.getStyle()
+            .set("width", "12px")
+            .set("height", "20px")
+            .set("background-color", "#212121")  // Schwarz
+            .set("border-radius", "3px")
+            .set("border", "1px solid #000");
+        return wheel;
     }
     
     /**
