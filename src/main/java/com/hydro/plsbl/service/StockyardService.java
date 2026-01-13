@@ -401,31 +401,33 @@ public class StockyardService {
         // Validierungen
         validateMergeConditions(yard1, yard2);
 
-        // Bestimme links (niedrigere X) und rechts (höhere X)
-        Stockyard left = yard1.getXCoordinate() < yard2.getXCoordinate() ? yard1 : yard2;
-        Stockyard right = yard1.getXCoordinate() < yard2.getXCoordinate() ? yard2 : yard1;
+        // Behalte den Platz mit HÖHERER X-Koordinate (visuell links im Grid)
+        // Das Grid zeigt X=17 links und X=1 rechts
+        // Der LONG-Platz spannt sich im CSS nach rechts (zu niedrigeren X-Werten)
+        Stockyard keep = yard1.getXCoordinate() > yard2.getXCoordinate() ? yard1 : yard2;
+        Stockyard delete = yard1.getXCoordinate() > yard2.getXCoordinate() ? yard2 : yard1;
 
-        // Linken Platz zu LONG umwandeln
-        left.markNotNew();
-        left.setUsage(StockyardUsage.LONG);
-        left.setLength(LONG_LENGTH);
-        left.setMaxIngots(LONG_MAX_INGOTS);
+        // Behaltenen Platz zu LONG umwandeln
+        keep.markNotNew();
+        keep.setUsage(StockyardUsage.LONG);
+        keep.setLength(LONG_LENGTH);
+        keep.setMaxIngots(LONG_MAX_INGOTS);
 
         // BOTTOM_CENTER_X neu berechnen (Mittelpunkt der beiden)
-        int newCenterX = (left.getXPosition() + right.getXPosition()) / 2;
-        left.setXPosition(newCenterX);
+        int newCenterX = (keep.getXPosition() + delete.getXPosition()) / 2;
+        keep.setXPosition(newCenterX);
 
-        // Linken Platz speichern
-        left = stockyardRepository.save(left);
+        // Behaltenen Platz speichern
+        keep = stockyardRepository.save(keep);
 
-        // Rechten Platz löschen (samt Status falls vorhanden)
-        statusRepository.findByStockyardId(right.getId()).ifPresent(statusRepository::delete);
-        stockyardRepository.deleteById(right.getId());
+        // Anderen Platz löschen (samt Status falls vorhanden)
+        statusRepository.findByStockyardId(delete.getId()).ifPresent(statusRepository::delete);
+        stockyardRepository.deleteById(delete.getId());
 
         log.info("Stockyards merged: {} + {} -> {} (Lang)",
-            stockyardId1, stockyardId2, left.getYardNumber());
+            stockyardId1, stockyardId2, keep.getYardNumber());
 
-        return toDTO(left);
+        return toDTO(keep);
     }
 
     private void validateMergeConditions(Stockyard yard1, Stockyard yard2) {

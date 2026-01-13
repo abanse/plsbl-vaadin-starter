@@ -104,18 +104,18 @@ public class LagerGrid extends Div {
         // 19: Beladung unten (45px)
         // 20: Unterer Zaun Beladung (6px)
 
+        // Spalten-Layout ohne extra Zaun-Spalte zwischen X=11 und X=10
+        // Alle Lagerplätze haben jetzt gleichmäßigen Abstand
         String colTemplate = FENCE_WIDTH + "px " +      // 1: Linker Zaun
                             FENCE_GAP + "px " +          // 2: Abstand
                             "25px " +                    // 3: Y-Labels
-                            "repeat(7, " + CELL_WIDTH + "px) " +   // 4-10: Lager (X=17 bis X=11)
-                            FENCE_WIDTH + "px " +        // 11: Vertikaler Zaun rechts von 11/01
-                            "repeat(10, " + CELL_WIDTH + "px) " +  // 12-21: Lager (X=10 bis X=1)
-                            FENCE_GAP + "px " +          // 22: Abstand
-                            "70px " +                    // 23: Säge / Personen-Tor
-                            CELL_WIDTH + "px " +         // 24: Lagerplätze 00/01-00/08
-                            FENCE_WIDTH + "px " +        // 25: Kleiner Zaun zwischen Toren
-                            "20px " +                    // 26: Barren-Tor
-                            FENCE_WIDTH + "px";          // 27: Rechter Zaun
+                            "repeat(17, " + CELL_WIDTH + "px) " +  // 4-20: Lager (X=17 bis X=1)
+                            FENCE_GAP + "px " +          // 21: Abstand
+                            "70px " +                    // 22: Säge / Personen-Tor
+                            CELL_WIDTH + "px " +         // 23: Lagerplätze 00/01-00/08
+                            FENCE_WIDTH + "px " +        // 24: Kleiner Zaun zwischen Toren
+                            "20px " +                    // 25: Barren-Tor
+                            FENCE_WIDTH + "px";          // 26: Rechter Zaun
 
         // Reihen-Layout (von oben nach unten):
         // 1: Säge-Bereich oben (55px)
@@ -178,16 +178,10 @@ public class LagerGrid extends Div {
         log.debug("Building grid {}x{}", columns, rows);
 
         // X-Achsen-Labels (oben, Reihe 4) - X=17 links bis X=1 rechts
+        // Einheitliche Spaltenberechnung: gridCol = columns - x + 4
         for (int x = columns; x >= 1; x--) {
             Span label = new Span(String.valueOf(x));
-            int gridCol;
-            if (x >= 11) {
-                // X=17-11 → Spalten 4-10
-                gridCol = columns - x + 4;
-            } else {
-                // X=10-1 → Spalten 12-21 (Spalte 11 ist der vertikale Zaun)
-                gridCol = columns - x + 5;
-            }
+            int gridCol = columns - x + 4;  // X=17 → Spalte 4, X=1 → Spalte 20
             label.getStyle()
                 .set("grid-column", String.valueOf(gridCol))
                 .set("grid-row", "4")
@@ -245,16 +239,9 @@ public class LagerGrid extends Div {
                 }
             });
 
-            // Grid-Position berechnen
+            // Grid-Position berechnen (einheitlich für alle X-Koordinaten)
             int xCoord = yard.getXCoordinate();
-            int gridCol;
-            if (xCoord >= 11) {
-                // X=17-11 → Spalten 4-10
-                gridCol = columns - xCoord + 4;
-            } else {
-                // X=10-1 → Spalten 12-21 (Spalte 11 ist der vertikale Zaun)
-                gridCol = columns - xCoord + 5;
-            }
+            int gridCol = columns - xCoord + 4;  // X=17 → Spalte 4, X=1 → Spalte 20
             // Y=10 -> Reihe 5, Y=1 -> Reihe 14
             int gridRow = rows - yard.getYCoordinate() + 5;
 
@@ -300,12 +287,12 @@ public class LagerGrid extends Div {
      * Wenn ein Säge-Lagerplatz vorhanden ist, wird er als interaktiver Button angezeigt
      */
     private void addSaegeausgang(StockyardDTO sawYard) {
-        // Säge-Container - Reihe 1-2, Spalte 23 (bis zur Zaun-Lücke)
+        // Säge-Container - Reihe 1-4, Spalte 21-22 (bis zur Zaun-Lücke)
         Div saegeContainer = new Div();
         saegeContainer.addClassName("saege-container");
         saegeContainer.getStyle()
-            .set("grid-column", "22 / 24")  // Säge-Bereich (halbe Strecke nach links)
-            .set("grid-row", "1 / 5")       // Von oben bis unter die X-Labels (richtig lang)
+            .set("grid-column", "21 / 23")  // Säge-Bereich (Gap + Säge)
+            .set("grid-row", "1 / 5")       // Von oben bis unter die X-Labels
             .set("margin-left", "-20px")    // Feineinstellung nach links
             .set("display", "flex")
             .set("flex-direction", "column")
@@ -364,14 +351,13 @@ public class LagerGrid extends Div {
      * - Unterer Zaun: L-förmig für Beladungsfläche (ab Platz 03/02)
      */
     private void addZaun() {
-        // Spalten: 1=linker Zaun, 22=rechter Zaun (hinter X=1)
-        // Reihen: 2=oberer Zaun, 16=unterer Zaun
+        // Spalten: 1=linker Zaun, 21=Gap, 26=rechter Zaun
+        // Alle Spalten nach der alten Zaun-Spalte 11 sind um 1 verschoben
 
         // Beladungsfläche geht von X=7 (links) bis X=3 (rechts)
-        // Der vertikale Zaun mit Einfahrt/Ausfahrt ist bei X=3
-        // Neue Spaltenberechnung: X<=10 bekommt +1 wegen der neuen Zaun-Spalte 11
-        int beladungLeftCol = columns - 7 + 5;   // Spalte 15 (X=7, linker Rand Beladung)
-        int lFormStartCol = columns - 3 + 5;     // Spalte 19 (X=3, vertikaler Zaun mit Toren)
+        // Einheitliche Spaltenberechnung: gridCol = columns - x + 4
+        int beladungLeftCol = columns - 7 + 4;   // Spalte 14 (X=7, linker Rand Beladung)
+        int lFormStartCol = columns - 3 + 4;     // Spalte 18 (X=3, vertikaler Zaun mit Toren)
 
         // ============ OBERER ZAUN (Reihe 2) mit Toren ============
 
@@ -382,126 +368,123 @@ public class LagerGrid extends Div {
             .set("grid-row", "2");
         add(topFence1);
 
-        // Tor 1 oben (Spalte 4) - oberhalb von Platz 17/10, so breit wie ein Lagerplatz
+        // Tor 1 oben (Spalte 4) - oberhalb von Platz 17/10
         Div topGate1 = createGate();
         topGate1.getStyle()
             .set("grid-column", "4")
             .set("grid-row", "2");
         add(topGate1);
 
-        // Zaun Mitte (Spalte 5-11)
+        // Zaun Mitte (Spalte 5-10, über X=16 bis X=11)
         Div topFence2 = createFenceSegment();
         topFence2.getStyle()
-            .set("grid-column", "5 / 12")
+            .set("grid-column", "5 / 11")
             .set("grid-row", "2");
         add(topFence2);
 
-        // Tor 2 oben (Spalte 12) - oberhalb von Platz 10/10, so breit wie ein Lagerplatz
+        // Tor 2 oben (Spalte 11) - oberhalb von Platz 10/10
         Div topGate2 = createGate();
         topGate2.getStyle()
-            .set("grid-column", "12")
+            .set("grid-column", "11")
             .set("grid-row", "2");
         add(topGate2);
 
-        // Zaun rechts bis zum Säge-Ausgang (Spalte 13-21, kürzer für SAW-Container)
+        // Zaun rechts bis zum Säge-Ausgang (Spalte 12-20)
         Div topFence3 = createFenceSegment();
         topFence3.getStyle()
-            .set("grid-column", "13 / 22")  // Bis Spalte 21 (kürzer für SAW-Container)
+            .set("grid-column", "12 / 21")
             .set("grid-row", "2");
         add(topFence3);
 
-        // Säge-Ausgang (Spalte 23, 70px breit - so breit wie die Säge)
-        // OFFEN - kein Zaun hier, damit Barren von der Säge ins Lager kommen
+        // Säge-Ausgang (Spalte 22) - OFFEN
 
-        // Zaun zwischen Säge-Ausgang und Tor 3 (länger um Lücke zu schließen)
+        // Zaun zwischen Säge-Ausgang und Tor 3
         Div topFence3c = createFenceSegment();
         topFence3c.getStyle()
-            .set("grid-column", "23 / 25")  // Breiter: Spalte 23-24
+            .set("grid-column", "22 / 24")
             .set("grid-row", "2")
-            .set("margin-left", "50px");    // Nach rechts vom SAW-Container
+            .set("margin-left", "50px");
         add(topFence3c);
 
-        // Tor 3 oberhalb von Platz 00/08 (Spalte 25)
+        // Tor 3 oberhalb von Platz 00/08 (Spalte 24)
         Div topGate3 = createGate();
         topGate3.getStyle()
-            .set("grid-column", "25")
+            .set("grid-column", "24")
             .set("grid-row", "2");
         add(topGate3);
 
-        // Zaun rechts von Tor 3 (Spalte 26-27)
+        // Zaun rechts von Tor 3 (Spalte 25-26)
         Div topFence4 = createFenceSegment();
         topFence4.getStyle()
-            .set("grid-column", "26 / 28")
+            .set("grid-column", "25 / 27")
             .set("grid-row", "2");
         add(topFence4);
 
-        // ============ LINKER ZAUN (Spalte 1) - bis Reihe 19 (wegen verschobener Plätze 17/01-11/01) ============
+        // ============ LINKER ZAUN (Spalte 1) ============
         Div leftFence = createFenceSegment();
         leftFence.getStyle()
             .set("grid-column", "1")
-            .set("grid-row", "2 / 20");  // Von oben bis Reihe 19 (inkl.) - Reihe 19 ist jetzt die Zaun-Reihe
+            .set("grid-row", "2 / 20");
         add(leftFence);
 
-        // Ecke unten-links (Spalte 1-2, Reihe 19) - schließt die Lücke zwischen linkem und unterem Zaun
+        // Ecke unten-links
         Div cornerBottomLeft = createFenceSegment();
         cornerBottomLeft.getStyle()
             .set("grid-column", "1 / 3")
             .set("grid-row", "19");
         add(cornerBottomLeft);
 
-        // ============ RECHTER ZAUN (Spalte 27) - endet bei Reihe 16 ============
-
-        // Zaun rechts (Reihe 2-16) bei Spalte 27
+        // ============ RECHTER ZAUN (Spalte 26) ============
         Div rightFence = createFenceSegment();
         rightFence.getStyle()
-            .set("grid-column", "27")
-            .set("grid-row", "2 / 17");  // Von oben bis Reihe 16 (inkl.)
+            .set("grid-column", "26")
+            .set("grid-row", "2 / 17");
         add(rightFence);
 
-        // ============ GEMEINSAMER ZAUN (Reihe 16) - nur ab Spalte 10 (Plätze 17/01-11/01 sind nach unten verschoben) ============
+        // ============ GEMEINSAMER ZAUN (Reihe 16) ============
 
-        // Zaun Spalte 11 bis 12 (linker Teil, bis zum Tor)
+        // Zaun Spalte 10-11 (bei X=11, linker Teil bis zum Tor)
         Div bottomFence2a = createFenceSegment();
         bottomFence2a.getStyle()
-            .set("grid-column", "11 / 13")
+            .set("grid-column", "10 / 12")
             .set("grid-row", "16")
-            .set("margin-right", "20px");  // Platz für das Tor lassen
+            .set("margin-right", "20px");
         add(bottomFence2a);
 
-        // Tor in Spalte 12 - 20px breit, rechts ausgerichtet
-        Div torSpalte12 = createGate();
-        torSpalte12.getStyle()
-            .set("grid-column", "12")
+        // Tor bei Spalte 11 (X=10)
+        Div torSpalte11 = createGate();
+        torSpalte11.getStyle()
+            .set("grid-column", "11")
             .set("grid-row", "16")
             .set("width", "20px")
             .set("justify-self", "end");
-        add(torSpalte12);
+        add(torSpalte11);
 
-        // Zaun von Spalte 13 bis zu den Toren (Spalte 13-22)
+        // Zaun von Spalte 12 bis zu den Toren (Spalte 12-21)
         Div bottomFence2 = createFenceSegment();
         bottomFence2.getStyle()
-            .set("grid-column", "13 / 23")
+            .set("grid-column", "12 / 22")
             .set("grid-row", "16");
         add(bottomFence2);
 
-        // Personen-Tor (Spalte 23)
+        // Personen-Tor (Spalte 22)
         Div personenTor = createGate();
         personenTor.getStyle()
-            .set("grid-column", "23")
+            .set("grid-column", "22")
             .set("grid-row", "16");
         add(personenTor);
 
-        // Zaun zwischen Personen-Tor und Barren-Tor (Spalte 24)
+        // Zaun zwischen Personen-Tor und Barren-Tor (Spalte 23)
         Div zaunZwischenToren = createFenceSegment();
         zaunZwischenToren.getStyle()
-            .set("grid-column", "24")
+            .set("grid-column", "23")
             .set("grid-row", "16");
         add(zaunZwischenToren);
 
-        // Barren-Tor (Spalte 25-27) - breiter
+        // Barren-Tor (Spalte 24-26)
         Div barrenTor = createGate();
         barrenTor.getStyle()
-            .set("grid-column", "25 / 28")
+            .set("grid-column", "24 / 27")
             .set("grid-row", "16");
         add(barrenTor);
 
@@ -525,21 +508,23 @@ public class LagerGrid extends Div {
             .set("justify-self", "end");
         add(torUnter1701);
 
-        // Zaun Spalte 5 bis 11 (rechter Teil)
+        // Zaun Spalte 5 bis 10 (rechter Teil, über X=16 bis X=11)
         Div bottomFenceShiftedRight = createFenceSegment();
         bottomFenceShiftedRight.getStyle()
-            .set("grid-column", "5 / 12")
+            .set("grid-column", "5 / 11")
             .set("grid-row", "19");
         add(bottomFenceShiftedRight);
 
-        // ============ VERTIKALER ZAUN RECHTS VON 11/01 (Spalte 11, Reihe 17-19) ============
+        // ============ VERTIKALER ZAUN RECHTS VON 11/01 (am Rand von Spalte 10/11, Reihe 17-19) ============
         // Verbindet den Zaun bei Reihe 16 mit dem Zaun bei Reihe 19
         Div verticalFenceRight1101 = createFenceSegment();
         verticalFenceRight1101.getStyle()
             .set("grid-column", "11")
-            .set("grid-row", "17 / 20")  // Reihen 17, 18 (Abstand), 19 (Zaun)
+            .set("grid-row", "17 / 20")
+            .set("width", FENCE_WIDTH + "px")
+            .set("justify-self", "start")
             .set("margin-top", "-4px")
-            .set("height", "calc(100% + 4px)");  // 4px länger oben
+            .set("height", "calc(100% + 4px)");
         add(verticalFenceRight1101);
 
         // ============ VERTIKALER ZAUN RECHTS DER BELADUNG (Spalte 19) mit Einfahrt ============
@@ -628,7 +613,7 @@ public class LagerGrid extends Div {
         // Zaun rechts vom Fahrer-Tor bis zum Ende der Beladungsfläche
         Div bottomFenceBeladung1 = createFenceSegment();
         bottomFenceBeladung1.getStyle()
-            .set("grid-column", beladungLeftCol + " / 19")
+            .set("grid-column", beladungLeftCol + " / " + lFormStartCol)
             .set("grid-row", "21")
             .set("margin-left", "20px");  // Platz für das Tor lassen
         add(bottomFenceBeladung1);
@@ -664,11 +649,11 @@ public class LagerGrid extends Div {
 
     /**
      * Fügt 8 zusätzliche Lagerplätze (00/01 bis 00/08) hinzu.
-     * Diese befinden sich in Spalte 24, zwischen der Säge und dem rechten Zaun.
+     * Diese befinden sich in Spalte 23, zwischen der Säge und dem rechten Zaun.
      * Y-Koordinaten: 2 bis 9 (Reihen 13 bis 6)
      */
     private void addZusaetzlicheLagerplaetze() {
-        // 00/01 bis 00/08 in Spalte 24
+        // 00/01 bis 00/08 in Spalte 23
         // Y=2 (Reihe 13) bis Y=9 (Reihe 6)
 
         for (int i = 1; i <= 8; i++) {
@@ -679,7 +664,7 @@ public class LagerGrid extends Div {
             Div platz = new Div();
             platz.addClassName("zusatz-lagerplatz");
             platz.getStyle()
-                .set("grid-column", "24")
+                .set("grid-column", "23")
                 .set("grid-row", String.valueOf(gridRow))
                 .set("background-color", "#E0E0E0")  // Grau (leer)
                 .set("border-radius", "4px")
@@ -718,16 +703,15 @@ public class LagerGrid extends Div {
     /**
      * Fügt die Beladungsfläche mit Trailer hinzu
      * Die Beladungsfläche ist im L-Ausschnitt rechts unten
-     * Von Platz 07/02 (links, Spalte 14) bis Platz 03/02 (rechts, Spalte 18)
-     * Spalten 14-17, Reihen 17-18 (unterhalb des gemeinsamen Zauns bei Reihe 16)
-     * Tore (Einfahrt, Ausfahrt, Fahrer) sind im Zaun bei Spalte 18
+     * Von Platz 07/02 (links, Spalte 14) bis Platz 04/02 (rechts, Spalte 17)
+     * Spalten 14-17, Reihen 17-20 (unterhalb des gemeinsamen Zauns bei Reihe 16)
      */
     private void addBeladungsflaeche() {
-        // Beladungsfläche: von X=7 (Spalte 15) bis X=4 (Spalte 18)
-        // Der Zaun mit Einfahrt/Ausfahrt ist bei X=3 (Spalte 19)
-        // Neue Spaltenberechnung: X<=10 bekommt +1 wegen der neuen Zaun-Spalte 11
-        int beladungLeftCol = columns - 7 + 5;   // Spalte 15 (X=7)
-        int beladungRightCol = columns - 4 + 5;  // Spalte 18 (X=4)
+        // Beladungsfläche: von X=7 (Spalte 14) bis X=4 (Spalte 17)
+        // Der Zaun mit Einfahrt/Ausfahrt ist bei X=3 (Spalte 18)
+        // Einheitliche Spaltenberechnung: gridCol = columns - x + 4
+        int beladungLeftCol = columns - 7 + 4;   // Spalte 14 (X=7)
+        int beladungRightCol = columns - 4 + 4;  // Spalte 17 (X=4)
 
         // Beladungsfläche (grauer Bereich)
         // Reihe 17 (45px) + Reihe 18 (12px Abstand) + Reihe 19 (6px Zaun) + Reihe 20 (45px) = optisch zusammenhängend
@@ -907,7 +891,7 @@ public class LagerGrid extends Div {
 
         cranePositionDisplay = new CranePositionDisplay();
         cranePositionDisplay.getStyle()
-            .set("grid-column", "25 / 28")
+            .set("grid-column", "24 / 27")
             .set("grid-row", "17 / 22")
             .set("justify-self", "center")
             .set("align-self", "start")
@@ -922,13 +906,10 @@ public class LagerGrid extends Div {
 
     /**
      * Berechnet die Grid-Spalte für eine X-Koordinate
+     * Einheitliche Berechnung für alle X-Werte
      */
     private int getGridColumnForX(int x) {
-        if (x >= 11) {
-            return columns - x + 4;
-        } else {
-            return columns - x + 5;
-        }
+        return columns - x + 4;  // X=17 → Spalte 4, X=1 → Spalte 20
     }
 
     /**

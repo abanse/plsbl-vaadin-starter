@@ -40,8 +40,6 @@ public class StockyardInfoDialog extends Dialog {
     private final StockyardService stockyardService;
     private final PlcService plcService;
     private Consumer<StockyardDTO> onEdit;
-    private Consumer<StockyardDTO> onDelete;
-    private Consumer<StockyardDTO> onForceDelete;
     private Consumer<IngotDTO> onIngotEdit;
     private Consumer<Void> onRelocated;
     private Consumer<StockyardDTO> onMerge;
@@ -348,12 +346,11 @@ public class StockyardInfoDialog extends Dialog {
     }
 
     private void createFooter() {
-        // Löschen-Button (links)
-        Button deleteButton = new Button("Löschen", VaadinIcon.TRASH.create());
-        deleteButton.addThemeVariants(ButtonVariant.LUMO_ERROR);
-        deleteButton.addClickListener(e -> confirmDelete());
+        // Schließen-Button (links)
+        Button closeButton = new Button("Schließen", VaadinIcon.CLOSE.create());
+        closeButton.addClickListener(e -> close());
 
-        // Spacer für Abstand zwischen Löschen und anderen Buttons
+        // Spacer für Abstand zwischen Schließen und anderen Buttons
         Span spacer = new Span();
         spacer.getStyle().set("flex-grow", "1");
 
@@ -389,11 +386,8 @@ public class StockyardInfoDialog extends Dialog {
             close();
         });
 
-        Button closeButton = new Button("Schließen", VaadinIcon.CLOSE.create());
-        closeButton.addClickListener(e -> close());
-
         HorizontalLayout footer = new HorizontalLayout(
-            deleteButton, spacer, mergeButton, splitButton, relocateButton, editButton, closeButton);
+            closeButton, spacer, mergeButton, splitButton, relocateButton, editButton);
         footer.setWidthFull();
 
         getFooter().add(footer);
@@ -435,50 +429,6 @@ public class StockyardInfoDialog extends Dialog {
         confirm.open();
     }
 
-    private void confirmDelete() {
-        // Prüfen ob Barren vorhanden
-        boolean hasIngots = stockyard.getStatus() != null && stockyard.getStatus().getIngotsCount() > 0;
-
-        if (hasIngots) {
-            // Force-Delete anbieten
-            ConfirmDialog confirm = new ConfirmDialog();
-            confirm.setHeader("Lagerplatz mit Barren löschen?");
-            confirm.setText("Auf diesem Lagerplatz befinden sich noch " +
-                stockyard.getStatus().getIngotsCount() + " Barren. " +
-                "Möchten Sie den Lagerplatz FORCIERT löschen? " +
-                "Die Barren werden vom Platz entfernt (nicht gelöscht).");
-            confirm.setCancelable(true);
-            confirm.setCancelText("Abbrechen");
-            confirm.setConfirmText("Forciert Löschen");
-            confirm.setConfirmButtonTheme("error primary");
-            confirm.addConfirmListener(e -> {
-                if (onForceDelete != null) {
-                    onForceDelete.accept(stockyard);
-                }
-                close();
-            });
-            confirm.open();
-            return;
-        }
-
-        // Normaler Bestätigungsdialog
-        ConfirmDialog confirm = new ConfirmDialog();
-        confirm.setHeader("Lagerplatz löschen?");
-        confirm.setText("Möchten Sie den Lagerplatz " + stockyard.getYardNumber() + " wirklich löschen? " +
-            "Diese Aktion kann nicht rückgängig gemacht werden.");
-        confirm.setCancelable(true);
-        confirm.setCancelText("Abbrechen");
-        confirm.setConfirmText("Löschen");
-        confirm.setConfirmButtonTheme("error primary");
-        confirm.addConfirmListener(e -> {
-            if (onDelete != null) {
-                onDelete.accept(stockyard);
-            }
-            close();
-        });
-        confirm.open();
-    }
-
     private void openUmlagernDialog() {
         try {
             UmlagernDialog dialog = new UmlagernDialog(stockyard, ingotService, stockyardService, plcService);
@@ -500,14 +450,6 @@ public class StockyardInfoDialog extends Dialog {
 
     public void setOnEdit(Consumer<StockyardDTO> onEdit) {
         this.onEdit = onEdit;
-    }
-
-    public void setOnDelete(Consumer<StockyardDTO> onDelete) {
-        this.onDelete = onDelete;
-    }
-
-    public void setOnForceDelete(Consumer<StockyardDTO> onForceDelete) {
-        this.onForceDelete = onForceDelete;
     }
 
     public void setOnIngotEdit(Consumer<IngotDTO> onIngotEdit) {

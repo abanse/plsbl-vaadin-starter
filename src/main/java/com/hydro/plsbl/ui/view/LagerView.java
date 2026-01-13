@@ -400,8 +400,6 @@ public class LagerView extends VerticalLayout {
         // Info-Dialog öffnen mit IngotService, StockyardService und PlcService
         StockyardInfoDialog dialog = new StockyardInfoDialog(stockyard, ingotService, stockyardService, plcService);
         dialog.setOnEdit(this::openEditDialog);
-        dialog.setOnDelete(this::deleteStockyard);
-        dialog.setOnForceDelete(this::forceDeleteStockyard);
         dialog.setOnIngotEdit(this::openIngotEditDialog);
         dialog.setOnRelocated(v -> loadData()); // Nach Umlagern Grid aktualisieren
         dialog.setOnMerge(this::openMergeDialog); // Merge-Dialog öffnen
@@ -519,44 +517,6 @@ public class LagerView extends VerticalLayout {
             com.vaadin.flow.component.notification.Notification
                 .show("Fehler: " + e.getMessage(), 5000,
                     com.vaadin.flow.component.notification.Notification.Position.MIDDLE)
-                .addThemeVariants(com.vaadin.flow.component.notification.NotificationVariant.LUMO_ERROR);
-        }
-    }
-
-    private void deleteStockyard(StockyardDTO stockyard) {
-        try {
-            stockyardService.delete(stockyard.getId());
-            loadData(); // Grid aktualisieren
-            log.info("Stockyard deleted: {}", stockyard.getYardNumber());
-
-            com.vaadin.flow.component.notification.Notification
-                .show("Lagerplatz " + stockyard.getYardNumber() + " wurde gelöscht",
-                    3000, com.vaadin.flow.component.notification.Notification.Position.BOTTOM_CENTER)
-                .addThemeVariants(com.vaadin.flow.component.notification.NotificationVariant.LUMO_SUCCESS);
-        } catch (Exception e) {
-            log.error("Error deleting stockyard", e);
-            com.vaadin.flow.component.notification.Notification
-                .show("Fehler beim Löschen: " + e.getMessage(),
-                    5000, com.vaadin.flow.component.notification.Notification.Position.MIDDLE)
-                .addThemeVariants(com.vaadin.flow.component.notification.NotificationVariant.LUMO_ERROR);
-        }
-    }
-
-    private void forceDeleteStockyard(StockyardDTO stockyard) {
-        try {
-            stockyardService.forceDelete(stockyard.getId());
-            loadData(); // Grid aktualisieren
-            log.info("Stockyard force deleted: {}", stockyard.getYardNumber());
-
-            com.vaadin.flow.component.notification.Notification
-                .show("Lagerplatz " + stockyard.getYardNumber() + " wurde forciert gelöscht",
-                    3000, com.vaadin.flow.component.notification.Notification.Position.BOTTOM_CENTER)
-                .addThemeVariants(com.vaadin.flow.component.notification.NotificationVariant.LUMO_SUCCESS);
-        } catch (Exception e) {
-            log.error("Error force deleting stockyard", e);
-            com.vaadin.flow.component.notification.Notification
-                .show("Fehler beim Löschen: " + e.getMessage(),
-                    5000, com.vaadin.flow.component.notification.Notification.Position.MIDDLE)
                 .addThemeVariants(com.vaadin.flow.component.notification.NotificationVariant.LUMO_ERROR);
         }
     }
