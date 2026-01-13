@@ -287,12 +287,12 @@ public class LagerGrid extends Div {
      * Wenn ein Säge-Lagerplatz vorhanden ist, wird er als interaktiver Button angezeigt
      */
     private void addSaegeausgang(StockyardDTO sawYard) {
-        // Säge-Container - Reihe 1-4, Spalte 21-22 (bis zur Zaun-Lücke)
+        // Säge-Container - Reihe 1-3, Spalte 21-22 (kürzer, nicht bis zu den Lagerplätzen)
         Div saegeContainer = new Div();
         saegeContainer.addClassName("saege-container");
         saegeContainer.getStyle()
             .set("grid-column", "21 / 23")  // Säge-Bereich (Gap + Säge)
-            .set("grid-row", "1 / 5")       // Von oben bis unter die X-Labels
+            .set("grid-row", "1 / 4")       // Nur bis zum Zaun (kürzer)
             .set("margin-left", "-20px")    // Feineinstellung nach links
             .set("display", "flex")
             .set("flex-direction", "column")
