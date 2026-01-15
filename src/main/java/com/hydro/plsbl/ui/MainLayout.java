@@ -7,6 +7,7 @@ import com.hydro.plsbl.ui.component.AccessControlBar;
 import com.hydro.plsbl.ui.component.CraneStatusBar;
 import com.hydro.plsbl.ui.view.AuftraegeView;
 import com.hydro.plsbl.ui.view.BarrenView;
+import com.hydro.plsbl.ui.view.BeladungView;
 import com.hydro.plsbl.ui.view.KranView;
 import com.hydro.plsbl.ui.view.LagerView;
 import com.hydro.plsbl.ui.view.PlcStatusView;
@@ -110,6 +111,7 @@ public class MainLayout extends AppLayout {
         tabs.add(createTab(VaadinIcon.CUBE, "Barren [F6]", BarrenView.class));
         tabs.add(createTab(VaadinIcon.COG_O, "Kran [F7]", KranView.class));
         tabs.add(createTab(VaadinIcon.SCISSORS, "Säge [F8]", SawView.class));
+        tabs.add(createTab(VaadinIcon.TRUCK, "Beladung [F9]", BeladungView.class));
         tabs.add(createTab(VaadinIcon.PLUG, "SPS-Status", PlcStatusView.class));
         tabs.add(createTab(VaadinIcon.COGS, "Einstellungen", SettingsView.class));
         

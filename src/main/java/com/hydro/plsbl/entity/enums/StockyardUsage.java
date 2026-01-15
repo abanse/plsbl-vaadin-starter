@@ -6,7 +6,8 @@ package com.hydro.plsbl.entity.enums;
 public enum StockyardUsage {
     SHORT('S', "Kurz", "-K-"),
     LONG('L', "Lang", "-L-"),
-    AUTOMATIC('A', "Automatisch", "-");
+    AUTOMATIC('A', "Automatisch", "-"),
+    RESERVED('R', "Schrott/Reserviert", "-R-");
     
     private final char code;
     private final String displayName;

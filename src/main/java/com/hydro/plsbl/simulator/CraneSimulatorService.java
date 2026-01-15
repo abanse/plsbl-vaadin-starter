@@ -308,15 +308,17 @@ public class CraneSimulatorService {
                 if (moveZ(config.getDefaultZ())) {
                     simCount++;
                 }
-                // Zur Parkposition fahren und fertig
-                if (simCount > 1 && moveXY(
-                        Math.max(xPosition, config.getParkX()),
-                        Math.max(yPosition, config.getParkY()))) {
+                // Am Ziel-Lagerplatz stehen bleiben (nicht zur Parkposition fahren)
+                // Der Kran bleibt am nächsten Lagerplatz (= dem Ziel der Umlagerung)
+                if (simCount > 1) {
                     workPhase = WorkPhase.IDLE;
                     jobState = JobState.IDLE;
+                    // Position merken als "Parkposition" für den nächsten Auftrag
+                    int finalX = currentCommand != null ? currentCommand.getReleaseX() : xPosition;
+                    int finalY = currentCommand != null ? currentCommand.getReleaseY() : yPosition;
                     currentCommand = null;
                     simCount = 0;
-                    log.info("Job completed, crane at ({}, {}, {})", xPosition, yPosition, zPosition);
+                    log.info("Job completed, crane stays at destination ({}, {}, {})", finalX, finalY, zPosition);
                 }
                 break;
         }

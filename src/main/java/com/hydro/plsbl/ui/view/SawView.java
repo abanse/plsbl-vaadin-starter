@@ -1,10 +1,15 @@
 package com.hydro.plsbl.ui.view;
 
+import com.hydro.plsbl.dto.IngotDTO;
 import com.hydro.plsbl.dto.SawStatusDTO;
 import com.hydro.plsbl.dto.StockyardDTO;
+import com.hydro.plsbl.dto.TransportOrderDTO;
+import com.hydro.plsbl.entity.enums.StockyardType;
+import com.hydro.plsbl.service.IngotService;
 import com.hydro.plsbl.service.SawStatusService;
 import com.hydro.plsbl.service.SettingsService;
 import com.hydro.plsbl.service.StockyardService;
+import com.hydro.plsbl.service.TransportOrderService;
 import com.hydro.plsbl.simulator.CraneSimulatorCommand;
 import com.hydro.plsbl.simulator.CraneSimulatorService;
 import com.hydro.plsbl.ui.MainLayout;
@@ -51,11 +56,14 @@ public class SawView extends VerticalLayout {
     private static final Logger log = LoggerFactory.getLogger(SawView.class);
     private static final int UPDATE_INTERVAL = 2;
     private static final DateTimeFormatter DATE_TIME_FORMAT = DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm:ss");
+    private static final Long SAW_STOCKYARD_ID = 1001L;  // SAW-01 Lagerplatz ID
 
     private final SawStatusService sawStatusService;
     private final CraneSimulatorService simulatorService;
     private final StockyardService stockyardService;
     private final SettingsService settingsService;
+    private final TransportOrderService transportOrderService;
+    private final IngotService ingotService;
 
     // Einlagerungsmodus
     private ComboBox<SawStatusDTO.PickupMode> pickupModeCombo;
@@ -107,6 +115,13 @@ public class SawView extends VerticalLayout {
     private Button infoButton;
     private Button simulatorStoreButton;
 
+    // Barren-Bearbeitung
+    private Button editIngotButton;
+    private Button saveIngotButton;
+    private Button cancelEditButton;
+    private IngotDTO currentIngot;
+    private boolean editMode = false;
+
     // Polling
     private ScheduledExecutorService updateExecutor;
     private ScheduledFuture<?> updateFuture;
@@ -114,11 +129,15 @@ public class SawView extends VerticalLayout {
     public SawView(SawStatusService sawStatusService,
                    CraneSimulatorService simulatorService,
                    StockyardService stockyardService,
-                   SettingsService settingsService) {
+                   SettingsService settingsService,
+                   TransportOrderService transportOrderService,
+                   IngotService ingotService) {
         this.sawStatusService = sawStatusService;
         this.simulatorService = simulatorService;
         this.stockyardService = stockyardService;
         this.settingsService = settingsService;
+        this.transportOrderService = transportOrderService;
+        this.ingotService = ingotService;
 
         setSizeFull();
         setPadding(true);
@@ -308,12 +327,38 @@ public class SawView extends VerticalLayout {
             .set("border", "1px solid #e0e0e0")
             .set("border-radius", "4px");
 
-        Span title = new Span("Barren-Daten");
+        // Header mit Titel und Bearbeiten-Buttons
+        HorizontalLayout header = new HorizontalLayout();
+        header.setWidthFull();
+        header.setJustifyContentMode(FlexComponent.JustifyContentMode.BETWEEN);
+        header.setAlignItems(FlexComponent.Alignment.CENTER);
+
+        Span title = new Span("Barren-Daten (SAW-01)");
         title.getStyle()
-            .set("font-weight", "bold")
-            .set("display", "block")
-            .set("margin-bottom", "10px");
-        section.add(title);
+            .set("font-weight", "bold");
+
+        // Bearbeiten-Buttons
+        HorizontalLayout editButtons = new HorizontalLayout();
+        editButtons.setSpacing(true);
+
+        editIngotButton = new Button("Bearbeiten", VaadinIcon.EDIT.create());
+        editIngotButton.addThemeVariants(ButtonVariant.LUMO_SMALL);
+        editIngotButton.setEnabled(false);
+        editIngotButton.addClickListener(e -> enableEditMode());
+
+        saveIngotButton = new Button("Speichern", VaadinIcon.CHECK.create());
+        saveIngotButton.addThemeVariants(ButtonVariant.LUMO_SMALL, ButtonVariant.LUMO_SUCCESS);
+        saveIngotButton.setVisible(false);
+        saveIngotButton.addClickListener(e -> saveIngot());
+
+        cancelEditButton = new Button("Abbrechen", VaadinIcon.CLOSE.create());
+        cancelEditButton.addThemeVariants(ButtonVariant.LUMO_SMALL, ButtonVariant.LUMO_ERROR);
+        cancelEditButton.setVisible(false);
+        cancelEditButton.addClickListener(e -> cancelEdit());
+
+        editButtons.add(editIngotButton, saveIngotButton, cancelEditButton);
+        header.add(title, editButtons);
+        section.add(header);
 
         FormLayout form = new FormLayout();
         form.setResponsiveSteps(
@@ -540,9 +585,81 @@ public class SawView extends VerticalLayout {
             if (statusOpt.isPresent()) {
                 updateDisplay(statusOpt.get());
             }
+
+            // Barren von SAW-01 laden (wenn nicht im Bearbeitungsmodus)
+            if (!editMode) {
+                loadIngotFromSaw();
+            }
         } catch (Exception e) {
             log.debug("Error loading saw status: {}", e.getMessage());
         }
+    }
+
+    /**
+     * Lädt den aktuellen Barren vom SAW-01 Lagerplatz
+     */
+    private void loadIngotFromSaw() {
+        try {
+            java.util.List<IngotDTO> ingots = ingotService.findByStockyardId(SAW_STOCKYARD_ID);
+
+            if (!ingots.isEmpty()) {
+                // Obersten Barren auf dem Säge-Platz verwenden
+                currentIngot = ingots.get(0);
+                updateIngotDisplay(currentIngot);
+                editIngotButton.setEnabled(true);
+                log.debug("Ingot loaded from SAW-01: {}", currentIngot.getIngotNo());
+            } else {
+                // Kein Barren auf SAW-01
+                currentIngot = null;
+                clearIngotDisplay();
+                editIngotButton.setEnabled(false);
+            }
+        } catch (Exception e) {
+            log.debug("Error loading ingot from SAW-01: {}", e.getMessage());
+            currentIngot = null;
+            editIngotButton.setEnabled(false);
+        }
+    }
+
+    /**
+     * Aktualisiert die Barren-Anzeige mit den Daten des aktuellen Barrens
+     */
+    private void updateIngotDisplay(IngotDTO ingot) {
+        if (ingot == null) {
+            clearIngotDisplay();
+            return;
+        }
+
+        ingotNoField.setValue(ingot.getIngotNo() != null ? ingot.getIngotNo() : "");
+        productNoField.setValue(ingot.getProductNo() != null ? ingot.getProductNo() : "");
+        productSuffixField.setValue(ingot.getProductSuffix() != null ? ingot.getProductSuffix() : "");
+        lengthField.setValue(formatNumber(ingot.getLength()));
+        widthField.setValue(formatNumber(ingot.getWidth()));
+        thicknessField.setValue(formatNumber(ingot.getThickness()));
+        weightField.setValue(formatNumber(ingot.getWeight()));
+
+        headSawnCheckbox.setValue(ingot.getHeadSawn() != null && ingot.getHeadSawn());
+        footSawnCheckbox.setValue(ingot.getFootSawn() != null && ingot.getFootSawn());
+        scrapCheckbox.setValue(ingot.getScrap() != null && ingot.getScrap());
+        revisedCheckbox.setValue(ingot.getRevised() != null && ingot.getRevised());
+    }
+
+    /**
+     * Leert die Barren-Anzeige
+     */
+    private void clearIngotDisplay() {
+        ingotNoField.setValue("");
+        productNoField.setValue("");
+        productSuffixField.setValue("");
+        lengthField.setValue("");
+        widthField.setValue("");
+        thicknessField.setValue("");
+        weightField.setValue("");
+
+        headSawnCheckbox.setValue(false);
+        footSawnCheckbox.setValue(false);
+        scrapCheckbox.setValue(false);
+        revisedCheckbox.setValue(false);
     }
 
     private void updateDisplay(SawStatusDTO status) {
@@ -568,20 +685,23 @@ public class SawView extends VerticalLayout {
         computedYField.setValue(formatNumber(status.getComputedY()));
         computedZField.setValue(formatNumber(status.getComputedZ()));
 
-        // Barren-Daten
-        ingotNoField.setValue(status.getIngotNo() != null ? status.getIngotNo() : "");
-        productNoField.setValue(status.getProductNo() != null ? status.getProductNo() : "");
-        productSuffixField.setValue(status.getProductSuffix() != null ? status.getProductSuffix() : "");
-        lengthField.setValue(formatNumber(status.getLength()));
-        widthField.setValue(formatNumber(status.getWidth()));
-        thicknessField.setValue(formatNumber(status.getThickness()));
-        weightField.setValue(formatNumber(status.getWeight()));
+        // Barren-Daten NUR aktualisieren wenn KEIN Barren von SAW-01 geladen ist
+        // und NICHT im Bearbeitungsmodus
+        if (currentIngot == null && !editMode) {
+            ingotNoField.setValue(status.getIngotNo() != null ? status.getIngotNo() : "");
+            productNoField.setValue(status.getProductNo() != null ? status.getProductNo() : "");
+            productSuffixField.setValue(status.getProductSuffix() != null ? status.getProductSuffix() : "");
+            lengthField.setValue(formatNumber(status.getLength()));
+            widthField.setValue(formatNumber(status.getWidth()));
+            thicknessField.setValue(formatNumber(status.getThickness()));
+            weightField.setValue(formatNumber(status.getWeight()));
 
-        // Säge-Status
-        headSawnCheckbox.setValue(status.isHeadSawn());
-        footSawnCheckbox.setValue(status.isFootSawn());
-        scrapCheckbox.setValue(status.isScrap());
-        revisedCheckbox.setValue(status.isRevised());
+            // Säge-Status
+            headSawnCheckbox.setValue(status.isHeadSawn());
+            footSawnCheckbox.setValue(status.isFootSawn());
+            scrapCheckbox.setValue(status.isScrap());
+            revisedCheckbox.setValue(status.isRevised());
+        }
 
         // Fehler
         errorTypeField.setValue(status.getErrorType() != null ? status.getErrorType() : "");
@@ -599,13 +719,13 @@ public class SawView extends VerticalLayout {
             errorMessageArea.getStyle().set("color", "blue");
         }
 
-        // Buttons aktivieren/deaktivieren
-        boolean hasIngot = status.hasIngot();
+        // Buttons aktivieren/deaktivieren - Barren von SAW-01 oder SawStatus
+        boolean hasIngot = currentIngot != null || status.hasIngot();
         boolean inProgress = status.isPickupInProgress();
-        swapOutButton.setEnabled(hasIngot && !inProgress);
-        toLoadingZoneButton.setEnabled(hasIngot && !inProgress);
-        toExternalStockButton.setEnabled(hasIngot && !inProgress);
-        deliverButton.setEnabled(hasIngot && !inProgress);
+        swapOutButton.setEnabled(hasIngot && !inProgress && !editMode);
+        toLoadingZoneButton.setEnabled(hasIngot && !inProgress && !editMode);
+        toExternalStockButton.setEnabled(hasIngot && !inProgress && !editMode);
+        deliverButton.setEnabled(hasIngot && !inProgress && !editMode);
 
         // Simulator-Button Status aktualisieren
         if (simulatorStoreButton != null) {
@@ -613,31 +733,639 @@ public class SawView extends VerticalLayout {
         }
     }
 
+    // === Edit Mode Methods ===
+
+    /**
+     * Aktiviert den Bearbeitungsmodus für den Barren
+     */
+    private void enableEditMode() {
+        if (currentIngot == null) {
+            Notification.show("Kein Barren zum Bearbeiten vorhanden!", 3000, Notification.Position.MIDDLE)
+                .addThemeVariants(NotificationVariant.LUMO_WARNING);
+            return;
+        }
+
+        editMode = true;
+
+        // Felder bearbeitbar machen
+        setFieldsEditable(true);
+
+        // Buttons umschalten
+        editIngotButton.setVisible(false);
+        saveIngotButton.setVisible(true);
+        cancelEditButton.setVisible(true);
+
+        log.info("Edit mode enabled for ingot: {}", currentIngot.getIngotNo());
+    }
+
+    /**
+     * Speichert die Änderungen am Barren
+     */
+    private void saveIngot() {
+        if (currentIngot == null) {
+            Notification.show("Kein Barren zum Speichern!", 3000, Notification.Position.MIDDLE)
+                .addThemeVariants(NotificationVariant.LUMO_ERROR);
+            return;
+        }
+
+        try {
+            // Werte aus den Feldern übernehmen
+            currentIngot.setIngotNo(ingotNoField.getValue());
+            currentIngot.setProductSuffix(productSuffixField.getValue());
+
+            // Numerische Werte parsen
+            currentIngot.setLength(parseIntOrNull(lengthField.getValue()));
+            currentIngot.setWidth(parseIntOrNull(widthField.getValue()));
+            currentIngot.setThickness(parseIntOrNull(thicknessField.getValue()));
+            currentIngot.setWeight(parseIntOrNull(weightField.getValue()));
+
+            // Checkboxen
+            currentIngot.setHeadSawn(headSawnCheckbox.getValue());
+            currentIngot.setFootSawn(footSawnCheckbox.getValue());
+            currentIngot.setScrap(scrapCheckbox.getValue());
+            currentIngot.setRevised(revisedCheckbox.getValue());
+
+            // Speichern
+            currentIngot = ingotService.save(currentIngot);
+
+            Notification.show("Barren " + currentIngot.getIngotNo() + " gespeichert!", 3000, Notification.Position.BOTTOM_CENTER)
+                .addThemeVariants(NotificationVariant.LUMO_SUCCESS);
+
+            log.info("Ingot saved: {}", currentIngot.getIngotNo());
+
+            // Edit-Modus beenden
+            disableEditMode();
+
+        } catch (Exception e) {
+            log.error("Error saving ingot", e);
+            Notification.show("Fehler beim Speichern: " + e.getMessage(), 5000, Notification.Position.MIDDLE)
+                .addThemeVariants(NotificationVariant.LUMO_ERROR);
+        }
+    }
+
+    /**
+     * Bricht die Bearbeitung ab
+     */
+    private void cancelEdit() {
+        disableEditMode();
+
+        // Daten neu laden um Änderungen zu verwerfen
+        if (currentIngot != null && currentIngot.getId() != null) {
+            ingotService.findById(currentIngot.getId()).ifPresent(this::updateIngotDisplay);
+        }
+
+        Notification.show("Bearbeitung abgebrochen", 2000, Notification.Position.BOTTOM_CENTER);
+    }
+
+    /**
+     * Deaktiviert den Bearbeitungsmodus
+     */
+    private void disableEditMode() {
+        editMode = false;
+
+        // Felder wieder schreibgeschützt
+        setFieldsEditable(false);
+
+        // Buttons zurücksetzen
+        editIngotButton.setVisible(true);
+        editIngotButton.setEnabled(currentIngot != null);
+        saveIngotButton.setVisible(false);
+        cancelEditButton.setVisible(false);
+    }
+
+    /**
+     * Setzt die Bearbeitbarkeit der Barren-Felder
+     */
+    private void setFieldsEditable(boolean editable) {
+        ingotNoField.setReadOnly(!editable);
+        productSuffixField.setReadOnly(!editable);
+        lengthField.setReadOnly(!editable);
+        widthField.setReadOnly(!editable);
+        thicknessField.setReadOnly(!editable);
+        weightField.setReadOnly(!editable);
+
+        headSawnCheckbox.setReadOnly(!editable);
+        footSawnCheckbox.setReadOnly(!editable);
+        scrapCheckbox.setReadOnly(!editable);
+        revisedCheckbox.setReadOnly(!editable);
+
+        // Visuelle Hervorhebung bei Bearbeitung
+        String borderColor = editable ? "2px solid var(--lumo-primary-color)" : "1px solid #e0e0e0";
+        String background = editable ? "var(--lumo-primary-color-10pct)" : "transparent";
+
+        ingotNoField.getStyle().set("border", editable ? "1px solid var(--lumo-primary-color)" : "none");
+        productSuffixField.getStyle().set("border", editable ? "1px solid var(--lumo-primary-color)" : "none");
+        lengthField.getStyle().set("border", editable ? "1px solid var(--lumo-primary-color)" : "none");
+        widthField.getStyle().set("border", editable ? "1px solid var(--lumo-primary-color)" : "none");
+        thicknessField.getStyle().set("border", editable ? "1px solid var(--lumo-primary-color)" : "none");
+        weightField.getStyle().set("border", editable ? "1px solid var(--lumo-primary-color)" : "none");
+    }
+
+    /**
+     * Parst einen String zu Integer oder gibt null zurück
+     */
+    private Integer parseIntOrNull(String value) {
+        if (value == null || value.trim().isEmpty()) {
+            return null;
+        }
+        try {
+            return Integer.parseInt(value.trim());
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
     // === Action Methods ===
 
+    /**
+     * Prüft ob ein Barren auf der Säge vorhanden ist (entweder von SAW-01 oder SawStatus)
+     */
+    private boolean hasIngotOnSaw() {
+        if (currentIngot != null) {
+            return true;
+        }
+        Optional<SawStatusDTO> statusOpt = sawStatusService.getCurrentStatus();
+        return statusOpt.isPresent() && statusOpt.get().hasIngot();
+    }
+
+    /**
+     * Gibt die Barren-Nummer des aktuellen Barrens zurück
+     */
+    private String getCurrentIngotNo() {
+        if (currentIngot != null) {
+            return currentIngot.getIngotNo();
+        }
+        Optional<SawStatusDTO> statusOpt = sawStatusService.getCurrentStatus();
+        return statusOpt.map(SawStatusDTO::getIngotNo).orElse("");
+    }
+
+    /**
+     * Öffnet Dialog zur Auswahl eines Auslagerplatzes (Typ O)
+     */
     private void swapOut() {
         log.info("Swap out clicked");
-        // TODO: Implementierung - Lagerplatz-Auswahl Dialog
+
+        if (!hasIngotOnSaw()) {
+            Notification.show("Kein Barren auf der Säge!", 3000, Notification.Position.MIDDLE)
+                .addThemeVariants(NotificationVariant.LUMO_WARNING);
+            return;
+        }
+
+        String typeCode = String.valueOf(StockyardType.SWAPOUT.getCode());
+        java.util.List<StockyardDTO> swapOutYards = stockyardService.findAvailableByType(typeCode);
+
+        if (swapOutYards.isEmpty()) {
+            Notification.show("Keine Auslagerplätze verfügbar!", 3000, Notification.Position.MIDDLE)
+                .addThemeVariants(NotificationVariant.LUMO_WARNING);
+            return;
+        }
+
+        Dialog dialog = new Dialog();
+        dialog.setHeaderTitle("Zu Auslagerplatz");
+        dialog.setWidth("450px");
+
+        VerticalLayout content = new VerticalLayout();
+        content.setPadding(false);
+        content.setSpacing(true);
+
+        Span info = new Span("Barren: " + getCurrentIngotNo());
+        info.getStyle().set("font-weight", "bold");
+        content.add(info);
+
+        Span infoText = new Span("Wählen Sie den Auslagerplatz:");
+        content.add(infoText);
+
+        ComboBox<StockyardDTO> yardCombo = new ComboBox<>("Auslagerplatz");
+        yardCombo.setWidthFull();
+        yardCombo.setItemLabelGenerator(yard ->
+            yard.getYardNumber() + " - " + (yard.getDescription() != null ? yard.getDescription() : "Auslagerung"));
+        yardCombo.setItems(swapOutYards);
+        if (!swapOutYards.isEmpty()) {
+            yardCombo.setValue(swapOutYards.get(0));
+        }
+        content.add(yardCombo);
+
+        Button cancelButton = new Button("Abbrechen", e -> dialog.close());
+        Button confirmButton = new Button("Transport erstellen", VaadinIcon.CHECK.create());
+        confirmButton.addThemeVariants(ButtonVariant.LUMO_PRIMARY);
+        confirmButton.addClickListener(e -> {
+            StockyardDTO target = yardCombo.getValue();
+            if (target != null) {
+                relocateIngotToYard(target, "Auslagerung von Säge");
+                dialog.close();
+            }
+        });
+
+        dialog.add(content);
+        dialog.getFooter().add(cancelButton, confirmButton);
+        dialog.open();
     }
 
+    /**
+     * Öffnet Bestätigungsdialog für Transport zur Verladezone (Typ L)
+     */
     private void toLoadingZone() {
         log.info("To loading zone clicked");
-        // TODO: Implementierung - Bestätigungsdialog
+
+        if (!hasIngotOnSaw()) {
+            Notification.show("Kein Barren auf der Säge!", 3000, Notification.Position.MIDDLE)
+                .addThemeVariants(NotificationVariant.LUMO_WARNING);
+            return;
+        }
+
+        String typeCode = String.valueOf(StockyardType.LOADING.getCode());
+        java.util.List<StockyardDTO> loadingYards = stockyardService.findAvailableByType(typeCode);
+
+        if (loadingYards.isEmpty()) {
+            Notification.show("Keine Verladeplätze verfügbar!", 3000, Notification.Position.MIDDLE)
+                .addThemeVariants(NotificationVariant.LUMO_WARNING);
+            return;
+        }
+
+        Dialog dialog = new Dialog();
+        dialog.setHeaderTitle("Zur Verladezone");
+        dialog.setWidth("450px");
+
+        VerticalLayout content = new VerticalLayout();
+        content.setPadding(false);
+        content.setSpacing(true);
+
+        Span info = new Span("Barren: " + getCurrentIngotNo());
+        info.getStyle().set("font-weight", "bold");
+        content.add(info);
+
+        ComboBox<StockyardDTO> yardCombo = new ComboBox<>("Verladeplatz");
+        yardCombo.setWidthFull();
+        yardCombo.setItemLabelGenerator(yard ->
+            yard.getYardNumber() + " - " + (yard.getDescription() != null ? yard.getDescription() : "Verladung"));
+        yardCombo.setItems(loadingYards);
+        if (!loadingYards.isEmpty()) {
+            yardCombo.setValue(loadingYards.get(0));
+        }
+        content.add(yardCombo);
+
+        Span confirmText = new Span("Barren wird zur Verladezone transportiert und steht zur Auslieferung bereit.");
+        confirmText.getStyle().set("color", "var(--lumo-secondary-text-color)");
+        content.add(confirmText);
+
+        Button cancelButton = new Button("Abbrechen", e -> dialog.close());
+        Button confirmButton = new Button("Zur Verladung", VaadinIcon.TRUCK.create());
+        confirmButton.addThemeVariants(ButtonVariant.LUMO_PRIMARY);
+        confirmButton.addClickListener(e -> {
+            StockyardDTO target = yardCombo.getValue();
+            if (target != null) {
+                relocateIngotToYard(target, "Transport zur Verladezone");
+                dialog.close();
+            }
+        });
+
+        dialog.add(content);
+        dialog.getFooter().add(cancelButton, confirmButton);
+        dialog.open();
     }
 
+    /**
+     * Öffnet Dialog zur Auswahl eines externen Lagerplatzes (Typ E)
+     */
     private void toExternalStock() {
         log.info("To external stock clicked");
-        // TODO: Implementierung - Lagerplatz-Auswahl Dialog
+
+        if (!hasIngotOnSaw()) {
+            Notification.show("Kein Barren auf der Säge!", 3000, Notification.Position.MIDDLE)
+                .addThemeVariants(NotificationVariant.LUMO_WARNING);
+            return;
+        }
+
+        String typeCode = String.valueOf(StockyardType.EXTERNAL.getCode());
+        java.util.List<StockyardDTO> externalYards = stockyardService.findAvailableByType(typeCode);
+
+        if (externalYards.isEmpty()) {
+            Notification.show("Keine externen Lagerplätze verfügbar!", 3000, Notification.Position.MIDDLE)
+                .addThemeVariants(NotificationVariant.LUMO_WARNING);
+            return;
+        }
+
+        Dialog dialog = new Dialog();
+        dialog.setHeaderTitle("Extern einlagern");
+        dialog.setWidth("450px");
+
+        VerticalLayout content = new VerticalLayout();
+        content.setPadding(false);
+        content.setSpacing(true);
+
+        Span info = new Span("Barren: " + getCurrentIngotNo());
+        info.getStyle().set("font-weight", "bold");
+        content.add(info);
+
+        Span infoText = new Span("Wählen Sie den externen Lagerplatz:");
+        content.add(infoText);
+
+        ComboBox<StockyardDTO> yardCombo = new ComboBox<>("Externer Lagerplatz");
+        yardCombo.setWidthFull();
+        yardCombo.setItemLabelGenerator(yard ->
+            yard.getYardNumber() + (yard.getStatus() != null ? " - " + yard.getStatus().getIngotsCount() + " Barren" : " - leer"));
+        yardCombo.setItems(externalYards);
+        if (!externalYards.isEmpty()) {
+            yardCombo.setValue(externalYards.get(0));
+        }
+        content.add(yardCombo);
+
+        Button cancelButton = new Button("Abbrechen", e -> dialog.close());
+        Button confirmButton = new Button("Extern einlagern", VaadinIcon.STORAGE.create());
+        confirmButton.addThemeVariants(ButtonVariant.LUMO_PRIMARY);
+        confirmButton.addClickListener(e -> {
+            StockyardDTO target = yardCombo.getValue();
+            if (target != null) {
+                relocateIngotToYard(target, "Externe Einlagerung von Säge");
+                dialog.close();
+            }
+        });
+
+        dialog.add(content);
+        dialog.getFooter().add(cancelButton, confirmButton);
+        dialog.open();
     }
 
+    /**
+     * Öffnet Bestätigungsdialog für direkte Lieferung
+     */
     private void deliver() {
         log.info("Deliver clicked");
-        // TODO: Implementierung - Lieferung
+
+        if (!hasIngotOnSaw()) {
+            Notification.show("Kein Barren auf der Säge!", 3000, Notification.Position.MIDDLE)
+                .addThemeVariants(NotificationVariant.LUMO_WARNING);
+            return;
+        }
+
+        // Ausgang-Platz finden
+        String typeCode = String.valueOf(StockyardType.AUSGANG.getCode());
+        java.util.List<StockyardDTO> exitYards = stockyardService.findAvailableByType(typeCode);
+
+        Dialog dialog = new Dialog();
+        dialog.setHeaderTitle("Liefern");
+        dialog.setWidth("450px");
+
+        VerticalLayout content = new VerticalLayout();
+        content.setPadding(false);
+        content.setSpacing(true);
+
+        Span info = new Span("Barren: " + getCurrentIngotNo());
+        info.getStyle().set("font-weight", "bold");
+        content.add(info);
+
+        // Produkt und Maße von currentIngot verwenden wenn verfügbar
+        if (currentIngot != null) {
+            if (currentIngot.getProductNo() != null) {
+                Span product = new Span("Artikel: " + currentIngot.getProductNo() +
+                    (currentIngot.getProductSuffix() != null ? "-" + currentIngot.getProductSuffix() : ""));
+                content.add(product);
+            }
+
+            Span dimensions = new Span(String.format("Maße: %d x %d x %d mm, %d kg",
+                currentIngot.getLength() != null ? currentIngot.getLength() : 0,
+                currentIngot.getWidth() != null ? currentIngot.getWidth() : 0,
+                currentIngot.getThickness() != null ? currentIngot.getThickness() : 0,
+                currentIngot.getWeight() != null ? currentIngot.getWeight() : 0));
+            content.add(dimensions);
+        }
+
+        content.add(new Hr());
+
+        Span confirmText = new Span("Der Barren wird direkt zur Auslieferung freigegeben.");
+        confirmText.getStyle().set("color", "var(--lumo-primary-color)").set("font-weight", "bold");
+        content.add(confirmText);
+
+        Button cancelButton = new Button("Abbrechen", e -> dialog.close());
+        Button confirmButton = new Button("Liefern", VaadinIcon.PACKAGE.create());
+        confirmButton.addThemeVariants(ButtonVariant.LUMO_SUCCESS);
+        confirmButton.addClickListener(e -> {
+            if (!exitYards.isEmpty()) {
+                relocateIngotToYard(exitYards.get(0), "Direkte Lieferung von Säge");
+            } else {
+                // Falls kein Ausgang-Platz definiert ist, zur ersten Verladezone
+                String loadingCode = String.valueOf(StockyardType.LOADING.getCode());
+                java.util.List<StockyardDTO> loadingYards = stockyardService.findAvailableByType(loadingCode);
+                if (!loadingYards.isEmpty()) {
+                    relocateIngotToYard(loadingYards.get(0), "Direkte Lieferung von Säge");
+                } else {
+                    Notification.show("Kein Auslieferungsplatz verfügbar!", 3000, Notification.Position.MIDDLE)
+                        .addThemeVariants(NotificationVariant.LUMO_ERROR);
+                }
+            }
+            dialog.close();
+        });
+
+        dialog.add(content);
+        dialog.getFooter().add(cancelButton, confirmButton);
+        dialog.open();
     }
 
+    /**
+     * Zeigt Info-Dialog mit Barren-Details
+     */
     private void showInfo() {
         log.info("Info clicked");
-        // TODO: Implementierung - Info-Dialog
+
+        Optional<SawStatusDTO> statusOpt = sawStatusService.getCurrentStatus();
+        if (statusOpt.isEmpty()) {
+            Notification.show("Kein Status verfügbar!", 3000, Notification.Position.MIDDLE)
+                .addThemeVariants(NotificationVariant.LUMO_WARNING);
+            return;
+        }
+
+        SawStatusDTO status = statusOpt.get();
+
+        Dialog dialog = new Dialog();
+        dialog.setHeaderTitle("Barren-Information");
+        dialog.setWidth("500px");
+
+        VerticalLayout content = new VerticalLayout();
+        content.setPadding(false);
+        content.setSpacing(true);
+
+        // Barren-Grunddaten
+        FormLayout form = new FormLayout();
+        form.setResponsiveSteps(new FormLayout.ResponsiveStep("0", 2));
+
+        addInfoField(form, "Barren-Nr:", status.getIngotNo());
+        addInfoField(form, "Artikel-Nr:", status.getProductNo());
+        addInfoField(form, "Suffix:", status.getProductSuffix());
+        addInfoField(form, "Einlagerungs-Nr:", status.getPickupNumber());
+
+        content.add(form);
+        content.add(new Hr());
+
+        // Maße
+        Span dimensionsTitle = new Span("Maße");
+        dimensionsTitle.getStyle().set("font-weight", "bold");
+        content.add(dimensionsTitle);
+
+        FormLayout dimensionsForm = new FormLayout();
+        dimensionsForm.setResponsiveSteps(new FormLayout.ResponsiveStep("0", 2));
+        addInfoField(dimensionsForm, "Länge:", formatMm(status.getLength()));
+        addInfoField(dimensionsForm, "Breite:", formatMm(status.getWidth()));
+        addInfoField(dimensionsForm, "Dicke:", formatMm(status.getThickness()));
+        addInfoField(dimensionsForm, "Gewicht:", status.getWeight() != null ? status.getWeight() + " kg" : "-");
+        content.add(dimensionsForm);
+
+        content.add(new Hr());
+
+        // Status-Flags
+        Span statusTitle = new Span("Status");
+        statusTitle.getStyle().set("font-weight", "bold");
+        content.add(statusTitle);
+
+        HorizontalLayout flags = new HorizontalLayout();
+        flags.setSpacing(true);
+        flags.setWidthFull();
+
+        addStatusBadge(flags, "Kopf gesägt", status.isHeadSawn());
+        addStatusBadge(flags, "Fuß gesägt", status.isFootSawn());
+        addStatusBadge(flags, "Schrott", status.isScrap());
+        addStatusBadge(flags, "Korrektur", status.isRevised());
+        content.add(flags);
+
+        // Positionen
+        if (status.getPositionX() != null || status.getComputedX() != null) {
+            content.add(new Hr());
+            Span posTitle = new Span("Positionen");
+            posTitle.getStyle().set("font-weight", "bold");
+            content.add(posTitle);
+
+            FormLayout posForm = new FormLayout();
+            posForm.setResponsiveSteps(new FormLayout.ResponsiveStep("0", 2));
+            addInfoField(posForm, "Von Säge (X/Y/Z):",
+                String.format("%s / %s / %s",
+                    formatMm(status.getPositionX()),
+                    formatMm(status.getPositionY()),
+                    formatMm(status.getPositionZ())));
+            addInfoField(posForm, "Errechnet (X/Y/Z):",
+                String.format("%s / %s / %s",
+                    formatMm(status.getComputedX()),
+                    formatMm(status.getComputedY()),
+                    formatMm(status.getComputedZ())));
+            content.add(posForm);
+        }
+
+        Button closeButton = new Button("Schließen", e -> dialog.close());
+        closeButton.addThemeVariants(ButtonVariant.LUMO_PRIMARY);
+
+        dialog.add(content);
+        dialog.getFooter().add(closeButton);
+        dialog.open();
+    }
+
+    // === Helper Methods für Dialoge ===
+
+    private void addInfoField(FormLayout form, String label, String value) {
+        TextField field = new TextField(label);
+        field.setValue(value != null ? value : "-");
+        field.setReadOnly(true);
+        field.getStyle().set("--vaadin-input-field-background", "white");
+        form.add(field);
+    }
+
+    private void addStatusBadge(HorizontalLayout layout, String label, boolean active) {
+        Span badge = new Span(label);
+        badge.getStyle()
+            .set("padding", "4px 8px")
+            .set("border-radius", "4px")
+            .set("font-size", "12px");
+        if (active) {
+            badge.getStyle()
+                .set("background-color", "var(--lumo-success-color-10pct)")
+                .set("color", "var(--lumo-success-text-color)");
+        } else {
+            badge.getStyle()
+                .set("background-color", "var(--lumo-contrast-10pct)")
+                .set("color", "var(--lumo-secondary-text-color)");
+        }
+        layout.add(badge);
+    }
+
+    private String formatMm(Integer value) {
+        if (value == null || value == 0) return "-";
+        return value + " mm";
+    }
+
+    /**
+     * Lagert den aktuellen Barren von SAW-01 auf den Ziel-Lagerplatz um
+     */
+    private void relocateIngotToYard(StockyardDTO targetYard, String description) {
+        if (currentIngot == null || currentIngot.getId() == null) {
+            Notification.show("Kein Barren zum Umlagern vorhanden!", 3000, Notification.Position.MIDDLE)
+                .addThemeVariants(NotificationVariant.LUMO_ERROR);
+            return;
+        }
+
+        try {
+            // Barren umlagern
+            ingotService.relocate(currentIngot.getId(), targetYard.getId());
+
+            Notification.show(
+                String.format("Barren %s umgelagert: SAW-01 → %s",
+                    currentIngot.getIngotNo(), targetYard.getYardNumber()),
+                5000, Notification.Position.BOTTOM_CENTER
+            ).addThemeVariants(NotificationVariant.LUMO_SUCCESS);
+
+            log.info("Ingot {} relocated from SAW-01 to {}: {}",
+                currentIngot.getIngotNo(), targetYard.getYardNumber(), description);
+
+            // Barren-Anzeige leeren und neu laden
+            currentIngot = null;
+            clearIngotDisplay();
+            editIngotButton.setEnabled(false);
+
+        } catch (Exception e) {
+            log.error("Error relocating ingot", e);
+            Notification.show("Fehler beim Umlagern: " + e.getMessage(),
+                5000, Notification.Position.MIDDLE)
+                .addThemeVariants(NotificationVariant.LUMO_ERROR);
+        }
+    }
+
+    /**
+     * Erstellt einen Transport-Auftrag von der Säge zum Ziel-Lagerplatz
+     */
+    private void createTransportToYard(SawStatusDTO sawStatus, StockyardDTO targetYard, String description) {
+        try {
+            // Säge-Position finden
+            String sawTypeCode = String.valueOf(StockyardType.SAW.getCode());
+            java.util.List<StockyardDTO> sawYards = stockyardService.findAvailableByType(sawTypeCode);
+            Long sawYardId = sawYards.isEmpty() ? null : sawYards.get(0).getId();
+
+            // Transport-Auftrag erstellen
+            TransportOrderDTO order = new TransportOrderDTO();
+            order.setTransportNo(generateTransportNo());
+            order.setNormText(description);
+            order.setFromYardId(sawYardId);
+            order.setFromPilePosition(1);
+            order.setToYardId(targetYard.getId());
+            order.setPriority(10); // Hohe Priorität für Säge-Aufträge
+
+            TransportOrderDTO saved = transportOrderService.save(order);
+
+            Notification.show(
+                String.format("Transport-Auftrag %s erstellt: Säge → %s",
+                    saved.getTransportNo(), targetYard.getYardNumber()),
+                5000, Notification.Position.BOTTOM_CENTER
+            ).addThemeVariants(NotificationVariant.LUMO_SUCCESS);
+
+            log.info("Transport order created: {} -> {}", saved.getTransportNo(), targetYard.getYardNumber());
+
+        } catch (Exception e) {
+            log.error("Error creating transport order", e);
+            Notification.show("Fehler beim Erstellen des Transport-Auftrags: " + e.getMessage(),
+                5000, Notification.Position.MIDDLE)
+                .addThemeVariants(NotificationVariant.LUMO_ERROR);
+        }
+    }
+
+    private String generateTransportNo() {
+        String prefix = "TA-SAW-";
+        long timestamp = System.currentTimeMillis() % 100000;
+        return prefix + String.format("%05d", timestamp);
     }
 
     // === Simulator Methods ===

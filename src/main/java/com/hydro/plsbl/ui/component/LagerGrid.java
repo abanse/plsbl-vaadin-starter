@@ -32,7 +32,14 @@ public class LagerGrid extends Div {
 
     private final Map<Long, StockyardButton> buttonMap = new HashMap<>();
     private Consumer<StockyardDTO> clickListener;
+    private Runnable trailerClickListener;
     private SettingsService settingsService;
+
+    // Trailer-Referenzen für dynamische Updates
+    private Div trailerContainer;
+    private Div trailerLadeflaeche;
+    private Span trailerCountLabel;
+    private int currentLoadedCount = 0;
 
     // Grid-Konfiguration (basierend auf Original)
     private int columns = 17;  // X-Koordinaten 17-1
@@ -239,15 +246,26 @@ public class LagerGrid extends Div {
                 }
             });
 
-            // Grid-Position berechnen (einheitlich für alle X-Koordinaten)
+            // Grid-Position berechnen
             int xCoord = yard.getXCoordinate();
-            int gridCol = columns - xCoord + 4;  // X=17 → Spalte 4, X=1 → Spalte 20
-            // Y=10 -> Reihe 5, Y=1 -> Reihe 14
-            int gridRow = rows - yard.getYCoordinate() + 5;
+            int gridCol;
+            int gridRow;
 
-            // Sonderfall: Plätze 17/01 bis 11/01 (Y=1, X>=11) werden nach Reihe 17 verschoben
-            if (yard.getYCoordinate() == 1 && xCoord >= 11) {
-                gridRow = 17;  // Nach unten verschieben
+            // Sonderfall: Schrott-Lagerplätze 00/01 bis 00/08 (X=0) -> Spalte 23
+            // Nach oben verschoben (1 Reihe) und nach links (halbe Zellbreite)
+            if (xCoord == 0) {
+                gridCol = 23;  // Spalte 23: zwischen Säge und rechtem Zaun
+                gridRow = rows - yard.getYCoordinate() + 4;  // 1 Reihe höher (Richtung Säge)
+                // Linksverschiebung wird unten über margin-left gesetzt
+            } else {
+                // Normale Berechnung für X=1 bis X=17
+                gridCol = columns - xCoord + 4;  // X=17 → Spalte 4, X=1 → Spalte 20
+                gridRow = rows - yard.getYCoordinate() + 5;  // Y=10 -> Reihe 5, Y=1 -> Reihe 14
+
+                // Sonderfall: Plätze 17/01 bis 11/01 (Y=1, X>=11) werden nach Reihe 17 verschoben
+                if (yard.getYCoordinate() == 1 && xCoord >= 11) {
+                    gridRow = 17;  // Nach unten verschieben
+                }
             }
 
             // LONG Lagerplätze über 2 Spalten spannen
@@ -261,6 +279,11 @@ public class LagerGrid extends Div {
                 button.getStyle()
                     .set("grid-column", String.valueOf(gridCol))
                     .set("grid-row", String.valueOf(gridRow));
+            }
+
+            // Schrott-Lagerplätze (X=0) nach links verschieben (halbe Zellbreite)
+            if (xCoord == 0) {
+                button.getStyle().set("margin-left", "-" + (CELL_WIDTH / 2) + "px");
             }
 
             add(button);
@@ -690,56 +713,14 @@ public class LagerGrid extends Div {
     }
 
     /**
-     * Fügt 8 zusätzliche Lagerplätze (00/01 bis 00/08) hinzu.
-     * Diese befinden sich in Spalte 23, zwischen der Säge und dem rechten Zaun.
-     * Y-Koordinaten: 2 bis 9 (Reihen 13 bis 6)
+     * Schrott-Lagerplätze (00/01 bis 00/08) werden jetzt direkt aus der Datenbank geladen.
+     * Sie haben X_COORDINATE=0 und werden in Spalte 23 platziert (siehe setStockyards).
+     * Diese Methode ist nur noch ein Platzhalter.
      */
     private void addZusaetzlicheLagerplaetze() {
-        // 00/01 bis 00/08 in Spalte 23
-        // Y=2 (Reihe 13) bis Y=9 (Reihe 6)
-
-        for (int i = 1; i <= 8; i++) {
-            String label = String.format("00/%02d", i);
-            int yCoord = i + 1;  // 00/01 bei Y=2, 00/08 bei Y=9
-            int gridRow = rows - yCoord + 5;  // Y=2 → Reihe 13, Y=9 → Reihe 6
-
-            Div platz = new Div();
-            platz.addClassName("zusatz-lagerplatz");
-            platz.getStyle()
-                .set("grid-column", "23")
-                .set("grid-row", String.valueOf(gridRow))
-                .set("background-color", "#E0E0E0")  // Grau (leer)
-                .set("border-radius", "4px")
-                .set("display", "flex")
-                .set("flex-direction", "column")
-                .set("align-items", "center")
-                .set("justify-content", "center")
-                .set("cursor", "pointer")
-                .set("min-width", CELL_WIDTH + "px")
-                .set("min-height", CELL_HEIGHT + "px");
-
-            // Platznummer
-            Span labelSpan = new Span(label);
-            labelSpan.getStyle()
-                .set("font-size", "9px")
-                .set("color", "#666");
-            platz.add(labelSpan);
-
-            // Anzahl (leer)
-            Span countSpan = new Span("-");
-            countSpan.getStyle()
-                .set("font-size", "14px")
-                .set("font-weight", "bold")
-                .set("color", "#666");
-            platz.add(countSpan);
-
-            // Tooltip
-            platz.getElement().setAttribute("title", label + " (Zusatz-Lagerplatz)");
-
-            add(platz);
-        }
-
-        log.debug("Added 8 additional storage places (00/01 - 00/08)");
+        // 00/01 bis 00/08 werden jetzt aus der Datenbank geladen
+        // und als echte StockyardButtons in Spalte 23 platziert
+        log.debug("Schrott-Lagerplätze (00/01 - 00/08) werden aus Datenbank geladen");
     }
 
     /**
@@ -783,14 +764,23 @@ public class LagerGrid extends Div {
         // Trailer aus Vogelperspektive (wie die anderen Lagerplätze)
         // Kabine links, Ladefläche rechts (Trailer fährt nach links raus)
         // Mit 4 schwarzen Rädern
-        Div trailerContainer = new Div();
+        trailerContainer = new Div();
         trailerContainer.addClassName("trailer");
         trailerContainer.getStyle()
             .set("position", "relative")
             .set("display", "flex")
             .set("flex-direction", "row")
             .set("align-items", "center")
-            .set("gap", "0px");
+            .set("gap", "0px")
+            .set("cursor", "pointer");
+
+        // Click-Handler für Trailer -> öffnet BeladungView
+        trailerContainer.getElement().addEventListener("click", e -> {
+            log.info("Trailer clicked");
+            if (trailerClickListener != null) {
+                trailerClickListener.run();
+            }
+        });
 
         // Zugmaschine (Kabine) - links
         Div kabine = new Div();
@@ -802,31 +792,29 @@ public class LagerGrid extends Div {
             .set("border", "2px solid #E65100")
             .set("border-right", "none");
 
-        // Ladefläche (Anhänger) - rechts, länger für 2 Barren hintereinander
-        Div ladeflaeche = new Div();
-        ladeflaeche.getStyle()
+        // Ladefläche (Anhänger) - rechts, länger für Barren-Anzeige
+        trailerLadeflaeche = new Div();
+        trailerLadeflaeche.getStyle()
             .set("width", "140px")
             .set("height", "60px")
             .set("background-color", "#FFB74D")  // Heller Orange
             .set("border-radius", "0 4px 4px 0")
             .set("border", "2px solid #E65100")
             .set("display", "flex")
+            .set("flex-direction", "column")
             .set("align-items", "center")
-            .set("justify-content", "space-evenly");
+            .set("justify-content", "center")
+            .set("gap", "2px");
 
-        // 2 Ladegut-Markierungen (für 2 Barren)
-        for (int i = 0; i < 2; i++) {
-            Div ladegut = new Div();
-            ladegut.getStyle()
-                .set("width", "55px")
-                .set("height", "40px")
-                .set("background-color", "#FF9800")
-                .set("border-radius", "2px")
-                .set("border", "1px dashed #E65100");
-            ladeflaeche.add(ladegut);
-        }
+        // Anzahl-Label für geladene Barren
+        trailerCountLabel = new Span("Leer");
+        trailerCountLabel.getStyle()
+            .set("font-size", "11px")
+            .set("font-weight", "bold")
+            .set("color", "#E65100");
+        trailerLadeflaeche.add(trailerCountLabel);
 
-        trailerContainer.add(kabine, ladeflaeche);
+        trailerContainer.add(kabine, trailerLadeflaeche);
 
         // 4 schwarze Räder hinzufügen (gut verteilt an der Ladefläche)
         // Hintere Achse (am Ende der Ladefläche) - oben
@@ -864,6 +852,86 @@ public class LagerGrid extends Div {
         return trailerContainer;
     }
 
+    /**
+     * Aktualisiert die Trailer-Anzeige mit der Anzahl geladener Barren
+     * @param loadedCount Anzahl der geladenen Barren
+     * @param totalCount Gesamtanzahl (geplant + geladen)
+     * @param isLoading true wenn Beladung aktiv läuft
+     */
+    public void updateTrailerLoad(int loadedCount, int totalCount, boolean isLoading) {
+        if (trailerLadeflaeche == null || trailerCountLabel == null) {
+            return;
+        }
+
+        this.currentLoadedCount = loadedCount;
+
+        // Ladefläche leeren (außer Label)
+        trailerLadeflaeche.removeAll();
+        trailerLadeflaeche.add(trailerCountLabel);
+
+        if (loadedCount == 0) {
+            trailerCountLabel.setText("Leer");
+            trailerCountLabel.getStyle().set("color", "#E65100");
+            trailerLadeflaeche.getStyle().set("background-color", "#FFB74D");
+        } else {
+            // Anzahl anzeigen
+            String text = loadedCount + " Barren";
+            if (isLoading && totalCount > loadedCount) {
+                text += " (" + (totalCount - loadedCount) + " offen)";
+            }
+            trailerCountLabel.setText(text);
+            trailerCountLabel.getStyle().set("color", "white");
+
+            // Barren-Visualisierung (gelbe Blöcke)
+            Div barrenContainer = new Div();
+            barrenContainer.getStyle()
+                .set("display", "flex")
+                .set("flex-wrap", "wrap")
+                .set("gap", "2px")
+                .set("justify-content", "center")
+                .set("max-width", "130px");
+
+            // Zeige bis zu 6 kleine Barren-Symbole
+            int displayCount = Math.min(loadedCount, 6);
+            for (int i = 0; i < displayCount; i++) {
+                Div barren = new Div();
+                barren.getStyle()
+                    .set("width", "18px")
+                    .set("height", "12px")
+                    .set("background", "linear-gradient(180deg, #FFD54F 0%, #FFC107 100%)")
+                    .set("border", "1px solid #FF8F00")
+                    .set("border-radius", "2px");
+                barrenContainer.add(barren);
+            }
+
+            if (loadedCount > 6) {
+                Span mehr = new Span("+" + (loadedCount - 6));
+                mehr.getStyle()
+                    .set("font-size", "9px")
+                    .set("color", "white");
+                barrenContainer.add(mehr);
+            }
+
+            trailerLadeflaeche.add(barrenContainer);
+
+            // Hintergrundfarbe ändern wenn beladen
+            if (isLoading) {
+                trailerLadeflaeche.getStyle().set("background-color", "#FF9800");  // Dunkler Orange
+            } else {
+                trailerLadeflaeche.getStyle().set("background-color", "#FFA726");  // Medium Orange
+            }
+        }
+
+        log.debug("Trailer updated: {} loaded, {} total, loading={}", loadedCount, totalCount, isLoading);
+    }
+
+    /**
+     * Gibt die aktuelle Anzahl geladener Barren zurück
+     */
+    public int getCurrentLoadedCount() {
+        return currentLoadedCount;
+    }
+
     private Div createWheel() {
         Div wheel = new Div();
         wheel.getStyle()
@@ -886,10 +954,17 @@ public class LagerGrid extends Div {
     }
     
     /**
-     * Registriert einen Click-Listener
+     * Registriert einen Click-Listener für Stockyards
      */
     public void addStockyardClickListener(Consumer<StockyardDTO> listener) {
         this.clickListener = listener;
+    }
+
+    /**
+     * Registriert einen Click-Listener für den Trailer (Beladungsfläche)
+     */
+    public void addTrailerClickListener(Runnable listener) {
+        this.trailerClickListener = listener;
     }
 
     // ========================================================================

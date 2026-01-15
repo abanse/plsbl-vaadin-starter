@@ -28,10 +28,11 @@ public interface StockyardRepository extends CrudRepository<Stockyard, Long> {
     
     /**
      * Findet alle Lagerplätze die in der StockView angezeigt werden sollen
-     * (Intern, Extern, Verladung) im Koordinatenbereich (1-17, 1-10)
+     * (Intern, Extern, Verladung) im Koordinatenbereich (0-17, 1-10)
      * PLUS Säge-Plätze (beliebige Koordinaten, da außerhalb des Grids)
+     * X=0 sind die Schrott-Lagerplätze 00/01 bis 00/08
      */
-    @Query("SELECT * FROM MD_STOCKYARD WHERE (YARD_TYPE IN ('I', 'E', 'L') AND X_COORDINATE BETWEEN 1 AND 17 AND Y_COORDINATE BETWEEN 1 AND 10) OR YARD_TYPE = 'S' ORDER BY Y_COORDINATE DESC, X_COORDINATE")
+    @Query("SELECT * FROM MD_STOCKYARD WHERE (YARD_TYPE IN ('I', 'E', 'L') AND X_COORDINATE BETWEEN 0 AND 17 AND Y_COORDINATE BETWEEN 1 AND 10) OR YARD_TYPE = 'S' ORDER BY Y_COORDINATE DESC, X_COORDINATE")
     List<Stockyard> findAllForStockView();
     
     /**
@@ -65,7 +66,7 @@ public interface StockyardRepository extends CrudRepository<Stockyard, Long> {
     /**
      * Findet alle Lagerplätze die als Ziel verfügbar sind (Einlagern erlaubt)
      */
-    @Query("SELECT * FROM MD_STOCKYARD WHERE TO_STOCK_ALLOWED = 1 ORDER BY YARD_NO")
+    @Query("SELECT * FROM MD_STOCKYARD WHERE TO_STOCK_ALLOWED = TRUE ORDER BY YARD_NO")
     List<Stockyard> findAvailableDestinations();
 
     /**

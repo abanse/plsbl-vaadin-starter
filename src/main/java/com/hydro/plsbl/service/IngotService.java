@@ -110,6 +110,146 @@ public class IngotService {
     }
 
     /**
+     * Findet alle Barren auf Lagerplätzen eines bestimmten Typs
+     * @param stockyardType Der Lagerplatz-Typ (z.B. 'L' für Loading, 'E' für External)
+     */
+    public List<IngotDTO> findByStockyardType(String stockyardType) {
+        log.debug("Loading ingots on stockyards of type {}", stockyardType);
+
+        String sql = "SELECT i.* FROM TD_INGOT i " +
+                     "JOIN MD_STOCKYARD s ON i.STOCKYARD_ID = s.ID " +
+                     "WHERE s.YARD_TYPE = ? " +
+                     "ORDER BY s.YARD_NO, i.PILE_POSITION DESC";
+
+        return jdbcTemplate.query(sql, (rs, rowNum) -> {
+            IngotDTO dto = new IngotDTO();
+            dto.setId(rs.getLong("ID"));
+            dto.setIngotNo(rs.getString("INGOT_NO"));
+            dto.setProductId(rs.getObject("PRODUCT_ID") != null ? rs.getLong("PRODUCT_ID") : null);
+            dto.setProductSuffix(rs.getString("PRODUCT_SUFFIX"));
+            dto.setStockyardId(rs.getObject("STOCKYARD_ID") != null ? rs.getLong("STOCKYARD_ID") : null);
+            dto.setPilePosition(rs.getObject("PILE_POSITION") != null ? rs.getInt("PILE_POSITION") : null);
+            dto.setWeight(rs.getObject("WEIGHT") != null ? rs.getInt("WEIGHT") : null);
+            dto.setLength(rs.getObject("LENGTH") != null ? rs.getInt("LENGTH") : null);
+            dto.setWidth(rs.getObject("WIDTH") != null ? rs.getInt("WIDTH") : null);
+            dto.setThickness(rs.getObject("THICKNESS") != null ? rs.getInt("THICKNESS") : null);
+            dto.setHeadSawn(rs.getObject("HEAD_SAWN") != null ? rs.getBoolean("HEAD_SAWN") : null);
+            dto.setFootSawn(rs.getObject("FOOT_SAWN") != null ? rs.getBoolean("FOOT_SAWN") : null);
+            dto.setScrap(rs.getObject("SCRAP") != null ? rs.getBoolean("SCRAP") : null);
+            dto.setRevised(rs.getObject("REVISED") != null ? rs.getBoolean("REVISED") : null);
+            dto.setRotated(rs.getObject("ROTATED") != null ? rs.getBoolean("ROTATED") : null);
+
+            // Produkt-Nummer und Lagerplatz-Nummer nachladen
+            if (dto.getProductId() != null) {
+                try {
+                    dto.setProductNo(jdbcTemplate.queryForObject(
+                        "SELECT PRODUCT_NO FROM MD_PRODUCT WHERE ID = ?", String.class, dto.getProductId()));
+                } catch (Exception e) { /* ignorieren */ }
+            }
+            if (dto.getStockyardId() != null) {
+                try {
+                    dto.setStockyardNo(jdbcTemplate.queryForObject(
+                        "SELECT YARD_NO FROM MD_STOCKYARD WHERE ID = ?", String.class, dto.getStockyardId()));
+                } catch (Exception e) { /* ignorieren */ }
+            }
+
+            return dto;
+        }, stockyardType);
+    }
+
+    /**
+     * Findet alle freigegebenen Barren (releasedSince != null)
+     */
+    public List<IngotDTO> findReleased() {
+        log.debug("Loading released ingots");
+
+        String sql = "SELECT * FROM TD_INGOT WHERE RELEASED_SINCE IS NOT NULL ORDER BY RELEASED_SINCE DESC";
+
+        return jdbcTemplate.query(sql, (rs, rowNum) -> {
+            IngotDTO dto = new IngotDTO();
+            dto.setId(rs.getLong("ID"));
+            dto.setIngotNo(rs.getString("INGOT_NO"));
+            dto.setProductId(rs.getObject("PRODUCT_ID") != null ? rs.getLong("PRODUCT_ID") : null);
+            dto.setStockyardId(rs.getObject("STOCKYARD_ID") != null ? rs.getLong("STOCKYARD_ID") : null);
+            dto.setPilePosition(rs.getObject("PILE_POSITION") != null ? rs.getInt("PILE_POSITION") : null);
+            dto.setWeight(rs.getObject("WEIGHT") != null ? rs.getInt("WEIGHT") : null);
+            dto.setLength(rs.getObject("LENGTH") != null ? rs.getInt("LENGTH") : null);
+            dto.setWidth(rs.getObject("WIDTH") != null ? rs.getInt("WIDTH") : null);
+            dto.setThickness(rs.getObject("THICKNESS") != null ? rs.getInt("THICKNESS") : null);
+
+            if (rs.getTimestamp("RELEASED_SINCE") != null) {
+                dto.setReleasedSince(rs.getTimestamp("RELEASED_SINCE").toLocalDateTime());
+            }
+
+            // Referenzen nachladen
+            if (dto.getProductId() != null) {
+                try {
+                    dto.setProductNo(jdbcTemplate.queryForObject(
+                        "SELECT PRODUCT_NO FROM MD_PRODUCT WHERE ID = ?", String.class, dto.getProductId()));
+                } catch (Exception e) { /* ignorieren */ }
+            }
+            if (dto.getStockyardId() != null) {
+                try {
+                    dto.setStockyardNo(jdbcTemplate.queryForObject(
+                        "SELECT YARD_NO FROM MD_STOCKYARD WHERE ID = ?", String.class, dto.getStockyardId()));
+                } catch (Exception e) { /* ignorieren */ }
+            }
+
+            return dto;
+        });
+    }
+
+    /**
+     * Gibt einen Barren frei (setzt releasedSince)
+     */
+    @Transactional
+    public void release(Long ingotId) {
+        log.info("Releasing ingot {}", ingotId);
+        jdbcTemplate.update(
+            "UPDATE TD_INGOT SET RELEASED_SINCE = CURRENT_TIMESTAMP WHERE ID = ?", ingotId);
+    }
+
+    /**
+     * Hebt die Freigabe eines Barrens auf
+     */
+    @Transactional
+    public void unreleaseIngot(Long ingotId) {
+        log.info("Unreleasing ingot {}", ingotId);
+        jdbcTemplate.update(
+            "UPDATE TD_INGOT SET RELEASED_SINCE = NULL WHERE ID = ?", ingotId);
+    }
+
+    /**
+     * Markiert einen Barren als ausgeliefert (entfernt vom Lagerplatz)
+     */
+    @Transactional
+    public void markAsShipped(Long ingotId) {
+        log.info("Marking ingot {} as shipped", ingotId);
+
+        // Stockyard-ID holen für Status-Update
+        Long stockyardId = jdbcTemplate.queryForObject(
+            "SELECT STOCKYARD_ID FROM TD_INGOT WHERE ID = ?", Long.class, ingotId);
+
+        // Barren vom Lagerplatz entfernen
+        jdbcTemplate.update(
+            "UPDATE TD_INGOT SET STOCKYARD_ID = NULL, PILE_POSITION = NULL WHERE ID = ?", ingotId);
+
+        // StockyardStatus aktualisieren
+        if (stockyardId != null) {
+            stockyardStatusRepository.findByStockyardId(stockyardId).ifPresent(status -> {
+                int newCount = Math.max(0, status.getIngotsCount() - 1);
+                if (newCount == 0) {
+                    stockyardStatusRepository.delete(status);
+                } else {
+                    jdbcTemplate.update(
+                        "UPDATE TD_STOCKYARDSTATUS SET INGOTS_COUNT = ?, SERIAL = SERIAL + 1 WHERE ID = ?",
+                        newCount, status.getId());
+                }
+            });
+        }
+    }
+
+    /**
      * Zählt alle Barren
      */
     public int countAll() {

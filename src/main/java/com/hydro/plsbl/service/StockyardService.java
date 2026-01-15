@@ -274,6 +274,46 @@ public class StockyardService {
     }
 
     /**
+     * Findet verfügbare Lagerplätze eines bestimmten Typs
+     */
+    public List<StockyardDTO> findAvailableByType(String typeCode) {
+        log.debug("Loading available stockyards of type: {}", typeCode);
+
+        List<Stockyard> stockyards = stockyardRepository.findByType(typeCode);
+
+        // IDs sammeln für Status-Abfrage
+        List<Long> stockyardIds = stockyards.stream()
+            .map(Stockyard::getId)
+            .collect(Collectors.toList());
+
+        // Status laden
+        Map<Long, StockyardStatus> statusMap = statusRepository.findByStockyardIdIn(stockyardIds)
+            .stream()
+            .collect(Collectors.toMap(StockyardStatus::getStockyardId, s -> s));
+
+        // DTOs erstellen und nach verfügbarem Platz filtern
+        return stockyards.stream()
+            .filter(Stockyard::isToStockAllowed)
+            .map(yard -> {
+                StockyardDTO dto = toDTO(yard);
+                StockyardStatus status = statusMap.get(yard.getId());
+                if (status != null) {
+                    dto.setStatus(toStatusDTO(status, yard.getMaxIngots()));
+                }
+                return dto;
+            })
+            .filter(dto -> !dto.isFull()) // Nur nicht-volle Plätze
+            .collect(Collectors.toList());
+    }
+
+    /**
+     * Findet den ersten verfügbaren Lagerplatz eines bestimmten Typs
+     */
+    public Optional<StockyardDTO> findFirstAvailableByType(String typeCode) {
+        return findAvailableByType(typeCode).stream().findFirst();
+    }
+
+    /**
      * Findet verfügbare Ziel-Lagerplätze (Einlagern erlaubt, nicht voll)
      */
     public List<StockyardDTO> findAvailableDestinations() {

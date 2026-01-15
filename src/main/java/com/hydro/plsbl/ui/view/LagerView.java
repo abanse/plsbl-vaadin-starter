@@ -5,6 +5,8 @@ import com.hydro.plsbl.dto.IngotDTO;
 import com.hydro.plsbl.dto.StockyardDTO;
 import com.hydro.plsbl.plc.PlcService;
 import com.hydro.plsbl.plc.dto.PlcCommand;
+import com.hydro.plsbl.service.BeladungBroadcaster;
+import com.hydro.plsbl.service.BeladungStateService;
 import com.hydro.plsbl.service.CraneStatusService;
 import com.hydro.plsbl.service.IngotService;
 import com.hydro.plsbl.service.SettingsService;
@@ -36,6 +38,8 @@ import com.vaadin.flow.router.RouteAlias;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.vaadin.flow.shared.Registration;
+
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -57,10 +61,10 @@ public class LagerView extends VerticalLayout {
 
     private static final Logger log = LoggerFactory.getLogger(LagerView.class);
 
-    // Kran-Update-Intervall in Sekunden
-    private static final int CRANE_UPDATE_INTERVAL = 1;
-    // Daten-Refresh-Intervall in Sekunden (für Stockyard-Daten)
-    private static final int DATA_REFRESH_INTERVAL = 3;
+    // Kran-Update-Intervall in Millisekunden (schneller = flüssiger)
+    private static final int CRANE_UPDATE_INTERVAL_MS = 200;
+    // Daten-Refresh-Intervall (alle X Kran-Updates)
+    private static final int DATA_REFRESH_MULTIPLIER = 15;  // ~3 Sekunden
 
     private final StockyardService stockyardService;
     private final IngotService ingotService;
@@ -68,6 +72,9 @@ public class LagerView extends VerticalLayout {
     private final CraneSimulatorService simulatorService;
     private final SettingsService settingsService;
     private final PlcService plcService;
+    private final BeladungStateService beladungStateService;
+    private final BeladungBroadcaster beladungBroadcaster;
+    private Registration broadcasterRegistration;
     private LagerGrid lagerGrid;
     private TextField searchField;
     private Map<Long, StockyardDTO> allStockyards = new LinkedHashMap<>();
@@ -82,15 +89,24 @@ public class LagerView extends VerticalLayout {
     private StockyardDTO relocateSource = null;
     private Button relocateButton;
 
+    // Beladungs-Status Anzeige
+    private Div beladungStatusPanel;
+    private Span beladungStatusLabel;
+    private Div beladungProgressBar;
+    private Div beladungProgressFill;
+
     public LagerView(StockyardService stockyardService, IngotService ingotService,
                      CraneStatusService craneStatusService, CraneSimulatorService simulatorService,
-                     SettingsService settingsService, PlcService plcService) {
+                     SettingsService settingsService, PlcService plcService,
+                     BeladungStateService beladungStateService, BeladungBroadcaster beladungBroadcaster) {
         this.stockyardService = stockyardService;
         this.ingotService = ingotService;
         this.craneStatusService = craneStatusService;
         this.simulatorService = simulatorService;
         this.settingsService = settingsService;
         this.plcService = plcService;
+        this.beladungStateService = beladungStateService;
+        this.beladungBroadcaster = beladungBroadcaster;
 
         setSizeFull();
         setPadding(true);
@@ -107,12 +123,32 @@ public class LagerView extends VerticalLayout {
     @Override
     protected void onAttach(AttachEvent attachEvent) {
         super.onAttach(attachEvent);
+        UI ui = attachEvent.getUI();
+
         // Kran-Updates starten
-        startCraneUpdates(attachEvent.getUI());
+        startCraneUpdates(ui);
+
+        // Broadcaster registrieren für Beladungs-Updates
+        broadcasterRegistration = beladungBroadcaster.register(event -> {
+            ui.access(() -> {
+                log.debug("Beladung event received: type={}, loaded={}, total={}",
+                    event.getType(), event.getGeladeneCount(), event.getTotalCount());
+                lagerGrid.updateTrailerLoad(event.getGeladeneCount(), event.getTotalCount(), event.isLoading());
+                updateBeladungStatusDisplay(event.getGeladeneCount(), event.getTotalCount(), event.isLoading());
+            });
+        });
+
+        // Initialen Status setzen
+        updateTrailerDisplay();
     }
 
     @Override
     protected void onDetach(DetachEvent detachEvent) {
+        // Broadcaster-Registrierung aufheben
+        if (broadcasterRegistration != null) {
+            broadcasterRegistration.remove();
+            broadcasterRegistration = null;
+        }
         // Kran-Updates stoppen
         stopCraneUpdates();
         super.onDetach(detachEvent);
@@ -124,6 +160,9 @@ public class LagerView extends VerticalLayout {
 
         Span info = new Span("Klicken Sie auf einen Lagerplatz für Details");
         info.getStyle().set("color", "gray");
+
+        // Beladungs-Status Panel
+        beladungStatusPanel = createBeladungStatusPanel();
 
         // Suchfeld
         searchField = new TextField();
@@ -158,11 +197,97 @@ public class LagerView extends VerticalLayout {
         boolean craneAvailable = plcService.isConnected() || plcService.isSimulatorMode();
         relocateButton.setEnabled(craneAvailable);
 
-        HorizontalLayout header = new HorizontalLayout(title, info, spacer, searchField, refreshButton, relocateButton, newButton);
-        header.setAlignItems(Alignment.BASELINE);
+        HorizontalLayout header = new HorizontalLayout(title, info, beladungStatusPanel, spacer, searchField, refreshButton, relocateButton, newButton);
+        header.setAlignItems(Alignment.CENTER);
         header.setWidthFull();
 
         add(header);
+    }
+
+    /**
+     * Erstellt das Beladungs-Status Panel für die Header-Leiste
+     */
+    private Div createBeladungStatusPanel() {
+        Div panel = new Div();
+        panel.getStyle()
+            .set("display", "flex")
+            .set("align-items", "center")
+            .set("gap", "10px")
+            .set("padding", "6px 12px")
+            .set("background-color", "#263238")
+            .set("border-radius", "4px")
+            .set("margin-left", "15px");
+
+        // LKW-Icon
+        Span truckIcon = new Span("🚛");
+        truckIcon.getStyle().set("font-size", "16px");
+        panel.add(truckIcon);
+
+        // Status-Label
+        beladungStatusLabel = new Span("Keine Beladung");
+        beladungStatusLabel.getStyle()
+            .set("color", "#90A4AE")
+            .set("font-size", "12px")
+            .set("white-space", "nowrap");
+        panel.add(beladungStatusLabel);
+
+        // Progress-Bar (eigene Implementation für bessere Kontrolle)
+        beladungProgressBar = new Div();
+        beladungProgressBar.getStyle()
+            .set("width", "80px")
+            .set("height", "8px")
+            .set("background-color", "#37474F")
+            .set("border-radius", "4px")
+            .set("overflow", "hidden");
+
+        beladungProgressFill = new Div();
+        beladungProgressFill.getStyle()
+            .set("height", "100%")
+            .set("width", "0%")
+            .set("background-color", "#4CAF50")
+            .set("border-radius", "4px")
+            .set("transition", "width 0.3s ease-out");
+        beladungProgressBar.add(beladungProgressFill);
+
+        panel.add(beladungProgressBar);
+
+        // Initial unsichtbar
+        panel.setVisible(false);
+
+        return panel;
+    }
+
+    /**
+     * Aktualisiert die Beladungs-Status Anzeige
+     */
+    private void updateBeladungStatusDisplay(int loadedCount, int totalCount, boolean isLoading) {
+        if (beladungStatusPanel == null) return;
+
+        if (totalCount == 0 && !isLoading) {
+            // Keine Beladung aktiv
+            beladungStatusPanel.setVisible(false);
+            return;
+        }
+
+        beladungStatusPanel.setVisible(true);
+
+        if (isLoading) {
+            beladungStatusLabel.setText(loadedCount + " / " + totalCount + " geladen");
+            beladungStatusLabel.getStyle().set("color", "#FFC107");  // Gelb während Beladung
+            beladungProgressFill.getStyle().set("background-color", "#FFC107");
+        } else if (loadedCount == totalCount && loadedCount > 0) {
+            beladungStatusLabel.setText(loadedCount + " Barren fertig!");
+            beladungStatusLabel.getStyle().set("color", "#4CAF50");  // Grün wenn fertig
+            beladungProgressFill.getStyle().set("background-color", "#4CAF50");
+        } else {
+            beladungStatusLabel.setText(loadedCount + " / " + totalCount);
+            beladungStatusLabel.getStyle().set("color", "#90A4AE");
+            beladungProgressFill.getStyle().set("background-color", "#4CAF50");
+        }
+
+        // Progress aktualisieren
+        double progress = totalCount > 0 ? (double) loadedCount / totalCount * 100 : 0;
+        beladungProgressFill.getStyle().set("width", progress + "%");
     }
 
     private void filterStockyards(String searchText) {
@@ -246,6 +371,12 @@ public class LagerView extends VerticalLayout {
 
         // Click-Handler für Stockyards
         lagerGrid.addStockyardClickListener(this::onStockyardClicked);
+
+        // Click-Handler für Trailer -> navigiert zur BeladungView
+        lagerGrid.addTrailerClickListener(() -> {
+            log.info("Trailer clicked, navigating to BeladungView");
+            UI.getCurrent().navigate(BeladungView.class);
+        });
 
         // Container mit Scroll
         Div container = new Div(lagerGrid);
@@ -612,7 +743,7 @@ public class LagerView extends VerticalLayout {
 
                     // Stockyard-Daten periodisch aktualisieren
                     dataRefreshCounter++;
-                    if (dataRefreshCounter >= DATA_REFRESH_INTERVAL) {
+                    if (dataRefreshCounter >= DATA_REFRESH_MULTIPLIER) {
                         dataRefreshCounter = 0;
                         refreshStockyardData();
                     }
@@ -620,9 +751,9 @@ public class LagerView extends VerticalLayout {
             } catch (Exception e) {
                 log.debug("Update skipped: {}", e.getMessage());
             }
-        }, CRANE_UPDATE_INTERVAL, CRANE_UPDATE_INTERVAL, TimeUnit.SECONDS);
+        }, CRANE_UPDATE_INTERVAL_MS, CRANE_UPDATE_INTERVAL_MS, TimeUnit.MILLISECONDS);
 
-        log.info("Crane updates started (interval: {}s, data refresh: {}s)", CRANE_UPDATE_INTERVAL, DATA_REFRESH_INTERVAL);
+        log.info("Crane updates started (interval: {}ms)", CRANE_UPDATE_INTERVAL_MS);
     }
 
     /**
@@ -671,9 +802,29 @@ public class LagerView extends VerticalLayout {
                     log.debug("No crane status available");
                 }
             }
+
+            // Trailer-Anzeige aktualisieren (geladene Barren)
+            updateTrailerDisplay();
+
         } catch (Exception e) {
             log.debug("Error loading crane status: {}", e.getMessage());
         }
+    }
+
+    /**
+     * Aktualisiert die Trailer-Anzeige mit den geladenen Barren aus dem BeladungStateService
+     */
+    private void updateTrailerDisplay() {
+        if (lagerGrid == null || beladungStateService == null) {
+            return;
+        }
+
+        int loadedCount = beladungStateService.getGeladeneCount();
+        int totalCount = beladungStateService.getTotalCount();
+        boolean isLoading = beladungStateService.isBeladungLaeuft();
+
+        lagerGrid.updateTrailerLoad(loadedCount, totalCount, isLoading);
+        updateBeladungStatusDisplay(loadedCount, totalCount, isLoading);
     }
 
     /**

@@ -16,24 +16,24 @@ public class CraneSimulatorConfig {
     private boolean enabled = true;
 
     /**
-     * Simulationsintervall in Millisekunden
+     * Simulationsintervall in Millisekunden (kleiner = flüssiger)
      */
-    private int intervalMs = 500;
+    private int intervalMs = 100;
 
     /**
      * Bewegungsschrittweite X in mm pro Intervall
      */
-    private int deltaX = 500;
+    private int deltaX = 200;
 
     /**
      * Bewegungsschrittweite Y in mm pro Intervall
      */
-    private int deltaY = 500;
+    private int deltaY = 200;
 
     /**
      * Bewegungsschrittweite Z in mm pro Intervall
      */
-    private int deltaZ = 200;
+    private int deltaZ = 80;
 
     /**
      * Standard-Höhe (Z-Position) in mm

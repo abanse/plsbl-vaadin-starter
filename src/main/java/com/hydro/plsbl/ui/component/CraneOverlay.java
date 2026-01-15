@@ -36,8 +36,8 @@ public class CraneOverlay extends Div {
             .set("height", size + "px")
             .set("position", "relative")
             .set("pointer-events", "none")  // Klicks durchlassen
-            // CSS Transitions für sanfte Bewegungen
-            .set("transition", "transform 0.5s ease-out")
+            // CSS Transitions für sanfte Bewegungen (200ms = Update-Intervall)
+            .set("transition", "transform 0.2s linear")
             .set("will-change", "transform");
 
         createCraneFrame();
@@ -130,8 +130,8 @@ public class CraneOverlay extends Div {
             .set("border-top", "8px solid transparent")
             .set("border-bottom", "8px solid transparent")
             .set("border-right", "12px solid " + GRIPPER_COLOR)
-            // Animation für Greifer-Höhe
-            .set("transition", "top 0.3s ease-out");
+            // Animation für Greifer-Höhe (200ms = Update-Intervall)
+            .set("transition", "top 0.2s linear");
         add(gripperIndicator);
 
         updateGripperPosition();

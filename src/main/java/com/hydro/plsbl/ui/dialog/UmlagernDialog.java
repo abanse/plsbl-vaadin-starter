@@ -89,7 +89,9 @@ public class UmlagernDialog extends Dialog {
         content.add(new H4("Quelle: " + sourceStockyard.getYardNumber()));
 
         // Barren auf diesem Platz anzeigen
-        content.add(new Span("Barren auf diesem Platz (sortiert nach Position):"));
+        Span infoSpan = new Span("Der Kran nimmt immer den obersten Barren (nur dieser kann umgelagert werden):");
+        infoSpan.getStyle().set("font-style", "italic");
+        content.add(infoSpan);
         content.add(createIngotGrid());
 
         // Info welcher Barren umgelagert wird
@@ -172,7 +174,44 @@ public class UmlagernDialog extends Dialog {
         ingotGrid.addThemeVariants(GridVariant.LUMO_COMPACT);
         ingotGrid.setSelectionMode(Grid.SelectionMode.NONE); // Keine Auswahl - nur Anzeige
 
+        // Alle Barren laden und nach Position sortieren (höchste zuerst)
+        List<IngotDTO> ingots = ingotService.findByStockyardId(sourceStockyard.getId());
+        ingots.sort((a, b) -> {
+            int posA = a.getPilePosition() != null ? a.getPilePosition() : 0;
+            int posB = b.getPilePosition() != null ? b.getPilePosition() : 0;
+            return Integer.compare(posB, posA); // Absteigend
+        });
+
+        // Nur obersten Barren als "ausgewählt" markieren
+        if (!ingots.isEmpty()) {
+            topIngot = ingots.get(0); // Oberster Barren (höchste Position)
+            selectedIngots.add(topIngot);
+        }
+
         // Spalten
+        // Status-Spalte: zeigt an welcher Barren genommen wird
+        ingotGrid.addComponentColumn(ingot -> {
+            if (topIngot != null && ingot.getId().equals(topIngot.getId())) {
+                Span badge = new Span("⬆ OBEN");
+                badge.getStyle()
+                    .set("background-color", "#4CAF50")
+                    .set("color", "white")
+                    .set("padding", "2px 6px")
+                    .set("border-radius", "4px")
+                    .set("font-size", "10px")
+                    .set("font-weight", "bold");
+                return badge;
+            } else {
+                Span badge = new Span("gesperrt");
+                badge.getStyle()
+                    .set("color", "#9E9E9E")
+                    .set("font-size", "10px");
+                return badge;
+            }
+        }).setHeader("")
+          .setWidth("70px")
+          .setFlexGrow(0);
+
         ingotGrid.addColumn(IngotDTO::getPilePosition)
             .setHeader("Pos")
             .setWidth("50px")
@@ -193,20 +232,27 @@ public class UmlagernDialog extends Dialog {
             .setAutoWidth(true)
             .setFlexGrow(0);
 
-        // Alle Barren laden und nach Position sortieren (höchste zuerst)
-        List<IngotDTO> ingots = ingotService.findByStockyardId(sourceStockyard.getId());
-        ingots.sort((a, b) -> {
-            int posA = a.getPilePosition() != null ? a.getPilePosition() : 0;
-            int posB = b.getPilePosition() != null ? b.getPilePosition() : 0;
-            return Integer.compare(posB, posA); // Absteigend
-        });
         ingotGrid.setItems(ingots);
 
-        // Nur obersten Barren als "ausgewählt" markieren
-        if (!ingots.isEmpty()) {
-            topIngot = ingots.get(0); // Oberster Barren (höchste Position)
-            selectedIngots.add(topIngot);
-        }
+        // Row-Styling: Oberster Barren grün, andere ausgegraut
+        ingotGrid.setClassNameGenerator(ingot -> {
+            if (topIngot != null && ingot.getId().equals(topIngot.getId())) {
+                return "top-ingot-row";
+            } else {
+                return "blocked-ingot-row";
+            }
+        });
+
+        // CSS für Zeilen-Styling hinzufügen
+        ingotGrid.getElement().executeJs(
+            "const style = document.createElement('style');" +
+            "style.textContent = `" +
+            "  vaadin-grid::part(row) {}" +
+            "  vaadin-grid tr.top-ingot-row { background-color: #E8F5E9 !important; }" +
+            "  vaadin-grid tr.blocked-ingot-row { background-color: #F5F5F5 !important; color: #9E9E9E !important; }" +
+            "`;" +
+            "this.shadowRoot.appendChild(style);"
+        );
 
         return ingotGrid;
     }
