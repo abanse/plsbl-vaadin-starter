@@ -97,8 +97,12 @@ public class StorageTestController {
      */
     @PostMapping("/storage")
     public ResponseEntity<Map<String, Object>> simulateStorage(@RequestBody KafkaPickupOrderMessage request) {
-        log.info("Test-Einlagerung gestartet: Barren={}, Produkt={}",
-            request.getIngotNumber(), request.getProductNumber());
+        log.info("=============================================");
+        log.info("REST API /api/test/storage aufgerufen");
+        log.info("  Empfangene Barren-Nr: {}", request.getIngotNumber());
+        log.info("  Empfangenes Produkt: {}", request.getProductNumber());
+        log.info("  Empfangene Länge: {} mm", request.getLength());
+        log.info("=============================================");
 
         Map<String, Object> response = new HashMap<>();
         response.put("timestamp", LocalDateTime.now().toString());
@@ -154,7 +158,11 @@ public class StorageTestController {
         String ingotNumber = "TEST-" + String.format("%04d", id % 10000);
         String productNumber = "4047-001"; // Standard-Produkt
 
-        log.info("Schnell-Test-Einlagerung: Barren={}", ingotNumber);
+        log.info("=============================================");
+        log.info("REST API /api/test/storage/quick aufgerufen");
+        log.info("  GENERIERTE Barren-Nr: {}", ingotNumber);
+        log.info("  (Dies ist der QUICK-Test - nicht der normale Endpoint!)");
+        log.info("=============================================");
 
         KafkaPickupOrderMessage request = new KafkaPickupOrderMessage();
         request.setIngotNumber(ingotNumber);

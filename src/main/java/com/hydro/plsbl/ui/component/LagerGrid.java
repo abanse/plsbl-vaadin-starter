@@ -50,6 +50,13 @@ public class LagerGrid extends Div {
     private static final int FENCE_WIDTH = 6;
     private static final int FENCE_GAP = 12;  // Abstand zwischen Zaun und Plätzen
 
+    // Säge-Lichtschranke für dynamische Updates
+    private Div sawLichtschranke;
+    private Long sawStockyardId;
+
+    // Ziel-Lagerplatz für Einlagerung (rote Umrandung)
+    private Long targetStockyardId;
+
     // Kran-Komponenten
     private CraneOverlay craneOverlay;
     private CranePositionDisplay cranePositionDisplay;
@@ -344,28 +351,20 @@ public class LagerGrid extends Div {
             saegeContainer.add(sawButton);
             buttonMap.put(sawYard.getId(), sawButton);
 
-            // Lichtschranke unten - grün wenn Einlagerung erlaubt
-            Div lichtschranke = new Div();
-            boolean einlagerungErlaubt = sawYard.isToStockAllowed();
-            lichtschranke.getStyle()
-                .set("width", "65px")
-                .set("height", "8px")
-                .set("border-radius", "4px")
-                .set("background-color", einlagerungErlaubt ? "#4CAF50" : "#F44336")  // Grün oder Rot
-                .set("box-shadow", einlagerungErlaubt
-                    ? "0 0 8px #4CAF50, 0 0 12px #4CAF50"   // Grünes Leuchten
-                    : "0 0 8px #F44336, 0 0 12px #F44336"); // Rotes Leuchten
-            lichtschranke.getElement().setAttribute("title",
-                einlagerungErlaubt ? "Einlagerung erlaubt" : "Einlagerung gesperrt");
-            saegeContainer.add(lichtschranke);
+            // Lichtschranke unten - grün wenn Barren auf der Säge liegt (bereit zur Einlagerung)
+            sawLichtschranke = new Div();
+            sawStockyardId = sawYard.getId();
+            boolean hasIngot = sawYard.getStatus() != null && sawYard.getStatus().getIngotsCount() > 0;
+            updateLichtschrankeStyle(hasIngot);
+            saegeContainer.add(sawLichtschranke);
 
             // Debug-Info
             String ingotInfo = sawYard.getStatus() != null && sawYard.getStatus().getIngotNumber() != null
                 ? sawYard.getStatus().getIngotNumber()
                 : "kein Barren";
             int count = sawYard.getStatus() != null ? sawYard.getStatus().getIngotsCount() : 0;
-            log.info("SAW position: {} - Barren: {}, Anzahl: {}, Einlagerung: {}",
-                sawYard.getYardNumber(), ingotInfo, count, einlagerungErlaubt ? "erlaubt" : "gesperrt");
+            log.info("SAW position: {} - Barren: {}, Anzahl: {}, Lichtschranke: {}",
+                sawYard.getYardNumber(), ingotInfo, count, hasIngot ? "GRÜN" : "ROT");
         } else {
             // Fallback: Statisches Säge-Symbol (kein Stockyard definiert)
             Div saege = new Div();
@@ -951,8 +950,72 @@ public class LagerGrid extends Div {
         if (button != null) {
             button.update(yard);
         }
+
+        // Säge-Lichtschranke aktualisieren wenn es der Säge-Platz ist
+        if (sawStockyardId != null && sawStockyardId.equals(yard.getId()) && sawLichtschranke != null) {
+            boolean hasIngot = yard.getStatus() != null && yard.getStatus().getIngotsCount() > 0;
+            updateLichtschrankeStyle(hasIngot);
+            log.debug("Lichtschranke aktualisiert: {}", hasIngot ? "GRÜN" : "ROT");
+        }
     }
-    
+
+    /**
+     * Aktualisiert das Styling der Säge-Lichtschranke
+     */
+    private void updateLichtschrankeStyle(boolean hasIngot) {
+        if (sawLichtschranke == null) return;
+
+        sawLichtschranke.getStyle()
+            .set("width", "65px")
+            .set("height", "8px")
+            .set("border-radius", "4px")
+            .set("background-color", hasIngot ? "#4CAF50" : "#F44336")
+            .set("box-shadow", hasIngot
+                ? "0 0 8px #4CAF50, 0 0 12px #4CAF50"
+                : "0 0 8px #F44336, 0 0 12px #F44336");
+        sawLichtschranke.getElement().setAttribute("title",
+            hasIngot ? "Barren bereit zur Einlagerung" : "Kein Barren auf der Säge");
+    }
+
+    /**
+     * Setzt den Ziel-Lagerplatz für die Einlagerung (rote Umrandung)
+     * @param stockyardId ID des Ziel-Lagerplatzes (null zum Löschen)
+     */
+    public void setTargetStockyard(Long stockyardId) {
+        // Alten Ziel-Platz zurücksetzen
+        if (targetStockyardId != null && !targetStockyardId.equals(stockyardId)) {
+            StockyardButton oldButton = buttonMap.get(targetStockyardId);
+            if (oldButton != null) {
+                oldButton.setTargetHighlight(false);
+            }
+        }
+
+        // Neuen Ziel-Platz setzen
+        targetStockyardId = stockyardId;
+        if (stockyardId != null) {
+            StockyardButton newButton = buttonMap.get(stockyardId);
+            if (newButton != null) {
+                newButton.setTargetHighlight(true);
+                log.info("Ziel-Lagerplatz markiert: {}", newButton.getStockyard().getYardNumber());
+            }
+        }
+    }
+
+    /**
+     * Löscht die Ziel-Markierung
+     */
+    public void clearTargetStockyard() {
+        setTargetStockyard(null);
+        log.debug("Ziel-Markierung gelöscht");
+    }
+
+    /**
+     * Gibt die aktuelle Ziel-Lagerplatz-ID zurück
+     */
+    public Long getTargetStockyardId() {
+        return targetStockyardId;
+    }
+
     /**
      * Registriert einen Click-Listener für Stockyards
      */
@@ -1149,6 +1212,7 @@ public class LagerGrid extends Div {
         private SettingsService settingsService;
         private Span yardLabel;
         private Span countLabel;
+        private boolean isTargetHighlighted = false;
 
         public StockyardButton(StockyardDTO stockyard, SettingsService settingsService) {
             this.settingsService = settingsService;
@@ -1194,25 +1258,44 @@ public class LagerGrid extends Div {
         public void update(StockyardDTO stockyard) {
             this.stockyard = stockyard;
 
-            // Platznummer setzen
-            yardLabel.setText(stockyard.getYardNumber());
-
             // Anzahl/Status setzen
             StockyardStatusDTO status = stockyard.getStatus();
 
-            if (status == null || status.isEmpty()) {
-                countLabel.setText("-");
+            // Für SAW-Plätze: Barren-Nummer anzeigen, bei mehreren die Anzahl
+            if (stockyard.getType() == StockyardType.SAW) {
+                yardLabel.setVisible(false);  // Platznummer ausblenden
+                if (status != null && status.getIngotsCount() > 0) {
+                    if (status.getIngotsCount() == 1) {
+                        // Ein Barren: Nummer anzeigen
+                        countLabel.setText(status.getIngotNumber() != null ? status.getIngotNumber() : "1");
+                        countLabel.getStyle()
+                            .set("font-size", "9px")
+                            .set("text-align", "center")
+                            .set("word-break", "break-all");
+                    } else {
+                        // Mehrere Barren: Anzahl als Warteschlange anzeigen
+                        countLabel.setText(status.getIngotsCount() + " ⏳");
+                        countLabel.getStyle()
+                            .set("font-size", "12px")
+                            .set("text-align", "center");
+                    }
+                } else {
+                    countLabel.setText("-");
+                    countLabel.getStyle().set("font-size", "14px");
+                }
             } else {
-                // Für SAW-Plätze: Barren-Nummer anzeigen statt Anzahl
-                if (stockyard.getType() == StockyardType.SAW && status.getIngotNumber() != null) {
-                    countLabel.setText(status.getIngotNumber());
-                    countLabel.getStyle().set("font-size", "10px");  // Kleinere Schrift für lange Nummern
+                // Normale Lagerplätze: Platznummer + Anzahl
+                yardLabel.setVisible(true);
+                yardLabel.setText(stockyard.getYardNumber());
+
+                if (status == null || status.isEmpty()) {
+                    countLabel.setText("-");
                 } else {
                     String countText = String.valueOf(status.getIngotsCount());
                     if (status.isRevisedOnTop()) countText += "k";
                     if (status.isScrapOnTop()) countText += "s";
                     countLabel.setText(countText);
-                    countLabel.getStyle().set("font-size", "14px");  // Normale Schrift
+                    countLabel.getStyle().set("font-size", "14px");
                 }
             }
 
@@ -1279,17 +1362,25 @@ public class LagerGrid extends Div {
                 .set("background-color", bgColor)
                 .set("color", textColor);
 
-            // Border für Einschränkungen (aus Einstellungen)
+            // Border für Ziel-Markierung oder Einschränkungen
             String border = "none";
-            if (!stockyard.isToStockAllowed() && !stockyard.isFromStockAllowed()) {
-                // Komplett gesperrt
-                border = "3px solid " + colorNoSwapInOut;
-            } else if (!stockyard.isToStockAllowed()) {
-                // Einlagern gesperrt
-                border = "3px solid " + colorNoSwapIn;
-            } else if (!stockyard.isFromStockAllowed()) {
-                // Auslagern gesperrt
-                border = "3px solid " + colorNoSwapOut;
+            if (isTargetHighlighted) {
+                // Ziel-Lagerplatz für Einlagerung - rote Umrandung mit Leucht-Effekt
+                border = "3px solid #F44336";
+                getStyle().set("box-shadow", "0 0 10px #F44336, 0 0 20px #F44336");
+            } else {
+                // Normale Border-Logik
+                getStyle().remove("box-shadow");
+                if (!stockyard.isToStockAllowed() && !stockyard.isFromStockAllowed()) {
+                    // Komplett gesperrt
+                    border = "3px solid " + colorNoSwapInOut;
+                } else if (!stockyard.isToStockAllowed()) {
+                    // Einlagern gesperrt
+                    border = "3px solid " + colorNoSwapIn;
+                } else if (!stockyard.isFromStockAllowed()) {
+                    // Auslagern gesperrt
+                    border = "3px solid " + colorNoSwapOut;
+                }
             }
             getStyle().set("border", border);
         }
@@ -1339,6 +1430,21 @@ public class LagerGrid extends Div {
 
         public StockyardDTO getStockyard() {
             return stockyard;
+        }
+
+        /**
+         * Setzt oder entfernt die Ziel-Hervorhebung (rote Umrandung)
+         */
+        public void setTargetHighlight(boolean highlight) {
+            this.isTargetHighlighted = highlight;
+            applyColors();  // Farben neu anwenden inkl. Border
+        }
+
+        /**
+         * Prüft ob dieser Button als Ziel markiert ist
+         */
+        public boolean isTargetHighlighted() {
+            return isTargetHighlighted;
         }
     }
 }

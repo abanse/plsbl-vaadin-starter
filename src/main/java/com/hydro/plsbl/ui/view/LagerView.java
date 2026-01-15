@@ -65,6 +65,8 @@ public class LagerView extends VerticalLayout {
     private static final int CRANE_UPDATE_INTERVAL_MS = 200;
     // Daten-Refresh-Intervall (alle X Kran-Updates)
     private static final int DATA_REFRESH_MULTIPLIER = 15;  // ~3 Sekunden
+    // Säge-Lagerplatz ID
+    private static final Long SAW_STOCKYARD_ID = 1001L;
 
     private final StockyardService stockyardService;
     private final IngotService ingotService;
@@ -94,6 +96,9 @@ public class LagerView extends VerticalLayout {
     private Span beladungStatusLabel;
     private Div beladungProgressBar;
     private Div beladungProgressFill;
+
+    // Ziel-Lagerplatz Tracking für Einlagerung von der Säge
+    private int previousSawIngotCount = 0;
 
     public LagerView(StockyardService stockyardService, IngotService ingotService,
                      CraneStatusService craneStatusService, CraneSimulatorService simulatorService,
@@ -487,11 +492,90 @@ public class LagerView extends VerticalLayout {
                 }
             }
 
+            // Säge-Status prüfen und Ziel-Lagerplatz markieren
+            checkSawAndUpdateTarget(newData);
+
             // Cache aktualisieren
             allStockyards = newData;
 
         } catch (Exception e) {
             log.debug("Error refreshing stockyard data: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * Prüft den Säge-Status und markiert/löscht den Ziel-Lagerplatz.
+     * Der Ziel-Platz wird aus dem Transport-Auftrag geholt (nicht geschätzt).
+     * Wenn die Säge leer wird, wird die Markierung gelöscht.
+     */
+    private void checkSawAndUpdateTarget(Map<Long, StockyardDTO> stockyards) {
+        StockyardDTO sawYard = stockyards.get(SAW_STOCKYARD_ID);
+        if (sawYard == null) {
+            log.debug("SAW Stockyard nicht gefunden (ID={})", SAW_STOCKYARD_ID);
+            return;
+        }
+
+        int currentSawIngotCount = sawYard.getStatus() != null ? sawYard.getStatus().getIngotsCount() : 0;
+
+        // Säge leer? -> Markierung löschen
+        if (currentSawIngotCount == 0) {
+            if (lagerGrid.getTargetStockyardId() != null) {
+                log.info(">>> SÄGE LEER - LÖSCHE MARKIERUNG <<<");
+                lagerGrid.clearTargetStockyard();
+            }
+            previousSawIngotCount = 0;
+            return;
+        }
+
+        // Anzahl hat sich geändert? -> Markierung aktualisieren (nächster Barren könnte anderes Ziel haben)
+        boolean countChanged = currentSawIngotCount != previousSawIngotCount;
+        boolean noTargetMarked = lagerGrid.getTargetStockyardId() == null;
+
+        if (countChanged || noTargetMarked) {
+            if (countChanged) {
+                log.info(">>> BARRENANZAHL GEÄNDERT: {} -> {} <<<", previousSawIngotCount, currentSawIngotCount);
+                // Alte Markierung löschen
+                lagerGrid.clearTargetStockyard();
+            }
+
+            log.info(">>> {} BARREN IN WARTESCHLANGE - SUCHE ZIEL FÜR ERSTEN <<<", currentSawIngotCount);
+            var ingots = ingotService.findByStockyardId(SAW_STOCKYARD_ID);
+            if (!ingots.isEmpty()) {
+                // Ersten Barren in der Warteschlange nehmen (niedrigste Position = ältester)
+                IngotDTO firstIngot = ingots.stream()
+                    .min((a, b) -> {
+                        int posA = a.getPilePosition() != null ? a.getPilePosition() : Integer.MAX_VALUE;
+                        int posB = b.getPilePosition() != null ? b.getPilePosition() : Integer.MAX_VALUE;
+                        return Integer.compare(posA, posB);
+                    })
+                    .orElse(ingots.get(0));
+
+                log.info("Erster Barren in Warteschlange: {} (ID={}, Position={})",
+                    firstIngot.getIngotNo(), firstIngot.getId(), firstIngot.getPilePosition());
+
+                // Ziel-Lagerplatz aus Transport-Auftrag holen
+                Optional<Long> targetYardId = findTargetYardFromTransportOrder(firstIngot.getId());
+                if (targetYardId.isPresent()) {
+                    log.info(">>> MARKIERE ZIEL-PLATZ: ID={} <<<", targetYardId.get());
+                    lagerGrid.setTargetStockyard(targetYardId.get());
+                } else {
+                    log.debug("Kein Transport-Auftrag für Barren {} gefunden", firstIngot.getIngotNo());
+                }
+            }
+        }
+
+        previousSawIngotCount = currentSawIngotCount;
+    }
+
+    /**
+     * Findet den Ziel-Lagerplatz aus einem offenen Transport-Auftrag für einen Barren
+     */
+    private Optional<Long> findTargetYardFromTransportOrder(Long ingotId) {
+        try {
+            return stockyardService.findPendingTransportOrderTarget(ingotId);
+        } catch (Exception e) {
+            log.debug("Konnte Transport-Auftrag nicht laden: {}", e.getMessage());
+            return Optional.empty();
         }
     }
 

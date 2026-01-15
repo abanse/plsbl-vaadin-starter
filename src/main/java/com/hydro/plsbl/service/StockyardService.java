@@ -314,6 +314,62 @@ public class StockyardService {
     }
 
     /**
+     * Findet den Ziel-Lagerplatz aus einem offenen Transport-Auftrag für einen Barren.
+     * Wird verwendet um den tatsächlichen Ziel-Platz zu markieren (nicht zu schätzen).
+     *
+     * @param ingotId ID des Barrens
+     * @return Optional mit Ziel-Lagerplatz-ID oder leer wenn kein Auftrag gefunden
+     */
+    public Optional<Long> findPendingTransportOrderTarget(Long ingotId) {
+        try {
+            // Status-Codes: P=PENDING, I=IN_PROGRESS, U=PICKED_UP, H=PAUSED
+            Long toYardId = jdbcTemplate.queryForObject(
+                "SELECT TO_YARD_ID FROM TD_TRANSPORTORDER WHERE INGOT_ID = ? AND STATUS IN ('P', 'I', 'U', 'H') ORDER BY ID DESC FETCH FIRST 1 ROWS ONLY",
+                Long.class, ingotId);
+            log.info("Transport-Auftrag gefunden für Barren {}: Ziel-Platz ID={}", ingotId, toYardId);
+            return Optional.ofNullable(toYardId);
+        } catch (Exception e) {
+            log.info("Kein offener Transport-Auftrag für Barren {} gefunden: {}", ingotId, e.getMessage());
+            return Optional.empty();
+        }
+    }
+
+    /**
+     * Findet einen passenden Lagerplatz für einen Barren basierend auf seiner Länge.
+     * Lange Barren (>6000mm) -> LONG Lagerplätze
+     * Kurze Barren (<=6000mm) -> SHORT Lagerplätze
+     *
+     * @param ingotLength Länge des Barrens in mm
+     * @return Optional mit passendem Lagerplatz oder leer wenn keiner gefunden
+     */
+    public Optional<StockyardDTO> findMatchingStockyard(int ingotLength) {
+        // Grenze für lange Barren (>6000mm = Lang)
+        boolean isLongIngot = ingotLength > 6000;
+        StockyardUsage targetUsage = isLongIngot ? StockyardUsage.LONG : StockyardUsage.SHORT;
+
+        log.info("Suche passenden Lagerplatz für Barren mit Länge {}mm -> {}",
+            ingotLength, targetUsage.getDisplayName());
+
+        List<StockyardDTO> available = findAvailableDestinations();
+
+        // Nach passender Verwendung filtern
+        Optional<StockyardDTO> match = available.stream()
+            .filter(yard -> yard.getUsage() == targetUsage)
+            .filter(yard -> yard.getType() == com.hydro.plsbl.entity.enums.StockyardType.INTERNAL) // Nur interne Plätze
+            .findFirst();
+
+        if (match.isPresent()) {
+            log.info("Passender Lagerplatz gefunden: {} ({})",
+                match.get().getYardNumber(), match.get().getUsage().getDisplayName());
+        } else {
+            log.warn("Kein passender Lagerplatz für {} Barren gefunden",
+                isLongIngot ? "langen" : "kurzen");
+        }
+
+        return match;
+    }
+
+    /**
      * Findet verfügbare Ziel-Lagerplätze (Einlagern erlaubt, nicht voll)
      */
     public List<StockyardDTO> findAvailableDestinations() {
@@ -642,10 +698,11 @@ public class StockyardService {
         }
 
         // Barren-Nummer laden (für alle Plätze mit Barren, z.B. SAW-Plätze)
+        // Erster Barren in Warteschlange = niedrigste Position (ASC) = nächster zu verarbeiten
         if (status.getIngotsCount() > 0) {
             try {
                 String ingotNo = jdbcTemplate.queryForObject(
-                    "SELECT INGOT_NO FROM TD_INGOT WHERE STOCKYARD_ID = ? ORDER BY PILE_POSITION DESC FETCH FIRST 1 ROWS ONLY",
+                    "SELECT INGOT_NO FROM TD_INGOT WHERE STOCKYARD_ID = ? ORDER BY PILE_POSITION ASC FETCH FIRST 1 ROWS ONLY",
                     String.class,
                     status.getStockyardId()
                 );

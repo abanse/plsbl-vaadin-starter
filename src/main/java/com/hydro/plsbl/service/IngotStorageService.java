@@ -136,7 +136,15 @@ public class IngotStorageService {
             boolean headSawn,
             boolean footSawn) {
 
-        log.info("Manuelle Einlagerungs-Anfrage: Barren={}, Produkt={}", ingotNumber, productNumber);
+        log.info("========================================");
+        log.info("NEUE EINLAGERUNG GESTARTET");
+        log.info("  Barren-Nr: {}", ingotNumber);
+        log.info("  Produkt: {}", productNumber);
+        log.info("  Gewicht: {} kg", weight);
+        log.info("  Länge: {} mm", length);
+        log.info("  Breite: {} mm", width);
+        log.info("  Höhe: {} mm", height);
+        log.info("========================================");
 
         // Kafka-Message erstellen
         KafkaPickupOrderMessage message = new KafkaPickupOrderMessage();
@@ -161,12 +169,32 @@ public class IngotStorageService {
         IngotDTO ingot = createIngot(message, productId, sawPosition.getId());
         log.info("Barren erstellt auf SAW: ingotNo={}, stockyardId={}", ingot.getIngotNo(), ingot.getStockyardId());
 
+        // Debug: Prüfen was jetzt tatsächlich auf der Säge liegt
+        try {
+            List<String> ingotsOnSaw = jdbcTemplate.queryForList(
+                "SELECT INGOT_NO FROM TD_INGOT WHERE STOCKYARD_ID = ?",
+                String.class, sawPosition.getId());
+            log.info(">>> AKTUELLE BARREN AUF SÄGE NACH ERSTELLUNG: {} <<<", ingotsOnSaw);
+        } catch (Exception e) {
+            log.warn("Debug-Abfrage fehlgeschlagen: {}", e.getMessage());
+        }
+
         // 4. Ziel-Lagerplatz finden
         Stockyard targetYard = findTargetStockyard(productId, null)
             .orElseThrow(() -> new IllegalStateException("Kein geeigneter Lagerplatz gefunden!"));
+        log.info("Ziel-Lagerplatz: {} (ID={})", targetYard.getYardNumber(), targetYard.getId());
 
         // 5. Transport-Auftrag erstellen
-        return createTransportOrder(ingot, sawPosition.getId(), targetYard.getId());
+        TransportOrderDTO order = createTransportOrder(ingot, sawPosition.getId(), targetYard.getId());
+
+        log.info("========================================");
+        log.info("EINLAGERUNG ABGESCHLOSSEN");
+        log.info("  Barren: {} (ID={})", ingot.getIngotNo(), ingot.getId());
+        log.info("  Von: {} -> Nach: {}", sawPosition.getYardNumber(), targetYard.getYardNumber());
+        log.info("  Transport-Auftrag: {}", order.getTransportNo());
+        log.info("========================================");
+
+        return order;
     }
 
     /**
@@ -214,14 +242,20 @@ public class IngotStorageService {
     }
 
     /**
-     * Erstellt einen neuen Barren
+     * Erstellt einen neuen Barren auf der Säge-Position.
+     * Alte Barren werden NICHT gelöscht - sie bleiben in der Warteschlange
+     * und werden nacheinander durch Transport-Aufträge abgearbeitet.
      */
     private IngotDTO createIngot(KafkaPickupOrderMessage message, Long productId, Long stockyardId) {
+        // Nächste freie Stapel-Position ermitteln (für Warteschlange)
+        int nextPosition = getNextPilePosition(stockyardId);
+        log.info("Neuer Barren wird auf Position {} in der Warteschlange erstellt", nextPosition);
+
         IngotDTO dto = new IngotDTO();
         dto.setIngotNo(message.getIngotNumber());
         dto.setProductId(productId);
         dto.setStockyardId(stockyardId);
-        dto.setPilePosition(1); // Auf der Saege immer Position 1
+        dto.setPilePosition(nextPosition); // Position in der Warteschlange
         dto.setWeight(message.getWeight());
         dto.setLength(message.getLength());
         dto.setWidth(message.getWidth());
@@ -232,6 +266,96 @@ public class IngotStorageService {
         dto.setInStockSince(LocalDateTime.now());
 
         return ingotService.save(dto);
+    }
+
+    /**
+     * Ermittelt die nächste freie Stapel-Position auf einem Lagerplatz
+     */
+    private int getNextPilePosition(Long stockyardId) {
+        try {
+            Integer maxPosition = jdbcTemplate.queryForObject(
+                "SELECT COALESCE(MAX(PILE_POSITION), 0) FROM TD_INGOT WHERE STOCKYARD_ID = ?",
+                Integer.class, stockyardId);
+            return (maxPosition != null ? maxPosition : 0) + 1;
+        } catch (Exception e) {
+            log.warn("Konnte Stapel-Position nicht ermitteln: {}", e.getMessage());
+            return 1;
+        }
+    }
+
+    /**
+     * Gibt die Anzahl der wartenden Barren auf der Säge zurück
+     */
+    public int getQueueSize() {
+        try {
+            Stockyard sawPosition = findSawPosition().orElse(null);
+            if (sawPosition == null) return 0;
+
+            Integer count = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM TD_INGOT WHERE STOCKYARD_ID = ?",
+                Integer.class, sawPosition.getId());
+            return count != null ? count : 0;
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    /**
+     * Entfernt alle Barren von der Säge-Position (nur für manuelle Bereinigung).
+     * Verwendet direktes SQL für maximale Zuverlässigkeit.
+     */
+    public void clearSawPosition(Long sawStockyardId) {
+        log.info("=== CLEAR SAW POSITION (ID={}) ===", sawStockyardId);
+
+        // 1. Prüfen was aktuell auf der Säge liegt (Debug)
+        try {
+            List<String> currentIngots = jdbcTemplate.queryForList(
+                "SELECT INGOT_NO FROM TD_INGOT WHERE STOCKYARD_ID = ?",
+                String.class, sawStockyardId);
+            log.info("Aktuelle Barren auf Säge: {}", currentIngots);
+        } catch (Exception e) {
+            log.warn("Konnte aktuelle Barren nicht abfragen: {}", e.getMessage());
+        }
+
+        // 2. Transport-Aufträge für alle Barren auf der Säge löschen
+        try {
+            int deletedOrders = jdbcTemplate.update(
+                "DELETE FROM TD_TRANSPORTORDER WHERE INGOT_ID IN (SELECT ID FROM TD_INGOT WHERE STOCKYARD_ID = ?)",
+                sawStockyardId);
+            log.info("Transport-Aufträge gelöscht: {}", deletedOrders);
+        } catch (Exception e) {
+            log.warn("Fehler beim Löschen der Transport-Aufträge: {}", e.getMessage());
+        }
+
+        // 3. Alle Barren auf der Säge direkt per SQL löschen
+        try {
+            int deletedIngots = jdbcTemplate.update(
+                "DELETE FROM TD_INGOT WHERE STOCKYARD_ID = ?", sawStockyardId);
+            log.info("Barren gelöscht: {}", deletedIngots);
+        } catch (Exception e) {
+            log.warn("Fehler beim Löschen der Barren: {}", e.getMessage());
+        }
+
+        // 4. StockyardStatus löschen
+        try {
+            int deletedStatus = jdbcTemplate.update(
+                "DELETE FROM TD_STOCKYARDSTATUS WHERE STOCKYARD_ID = ?", sawStockyardId);
+            log.info("StockyardStatus gelöscht: {}", deletedStatus);
+        } catch (Exception e) {
+            log.warn("Fehler beim Löschen des StockyardStatus: {}", e.getMessage());
+        }
+
+        // 5. Bestätigen dass Säge jetzt leer ist
+        try {
+            Integer count = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM TD_INGOT WHERE STOCKYARD_ID = ?",
+                Integer.class, sawStockyardId);
+            log.info("Barren auf Säge nach Löschung: {}", count);
+        } catch (Exception e) {
+            log.warn("Konnte Anzahl nicht prüfen: {}", e.getMessage());
+        }
+
+        log.info("=== SAW POSITION CLEARED ===");
     }
 
     /**
