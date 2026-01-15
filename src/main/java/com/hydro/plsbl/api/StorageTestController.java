@@ -241,6 +241,57 @@ public class StorageTestController {
     }
 
     /**
+     * Zeigt die aktuelle Warteschlange auf der Saege
+     */
+    @GetMapping("/storage/queue")
+    public ResponseEntity<Map<String, Object>> getQueue() {
+        log.info("Abfrage der Säge-Warteschlange");
+
+        Map<String, Object> response = new HashMap<>();
+        response.put("timestamp", LocalDateTime.now().toString());
+
+        try {
+            int queueSize = ingotStorageService.getQueueSize();
+            var queueItems = ingotStorageService.getQueueItems();
+
+            response.put("queueSize", queueSize);
+            response.put("items", queueItems);
+            response.put("message", queueSize == 0 ? "Warteschlange ist leer" : queueSize + " Barren in Warteschlange");
+
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            log.error("Fehler beim Abrufen der Warteschlange: {}", e.getMessage());
+            response.put("error", e.getMessage());
+            return ResponseEntity.badRequest().body(response);
+        }
+    }
+
+    /**
+     * Loescht alle Barren auf der Saege (leert die Warteschlange)
+     */
+    @DeleteMapping("/storage/queue")
+    public ResponseEntity<Map<String, Object>> clearQueue() {
+        log.info("Loesche Säge-Warteschlange");
+
+        Map<String, Object> response = new HashMap<>();
+        response.put("timestamp", LocalDateTime.now().toString());
+
+        try {
+            int deleted = ingotStorageService.clearSawPosition();
+            response.put("success", true);
+            response.put("deletedCount", deleted);
+            response.put("message", deleted + " Barren geloescht");
+
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            log.error("Fehler beim Loeschen der Warteschlange: {}", e.getMessage());
+            response.put("success", false);
+            response.put("error", e.getMessage());
+            return ResponseEntity.badRequest().body(response);
+        }
+    }
+
+    /**
      * Gibt eine Beschreibung der verfuegbaren Test-Endpunkte zurueck
      */
     @GetMapping("/storage/help")
@@ -272,6 +323,16 @@ public class StorageTestController {
                 "method", "POST",
                 "path", "/api/test/storage/batch/{count}",
                 "description", "Erstellt mehrere Test-Einlagerungen (max 10)"
+            ),
+            Map.of(
+                "method", "GET",
+                "path", "/api/test/storage/queue",
+                "description", "Zeigt aktuelle Warteschlange auf der Saege"
+            ),
+            Map.of(
+                "method", "DELETE",
+                "path", "/api/test/storage/queue",
+                "description", "Loescht alle Barren auf der Saege (leert Warteschlange)"
             )
         ));
         return ResponseEntity.ok(help);

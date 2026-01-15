@@ -1261,24 +1261,17 @@ public class LagerGrid extends Div {
             // Anzahl/Status setzen
             StockyardStatusDTO status = stockyard.getStatus();
 
-            // Für SAW-Plätze: Barren-Nummer anzeigen, bei mehreren die Anzahl
+            // Für SAW-Plätze: Immer die Barren-Nummer des nächsten Barrens anzeigen
             if (stockyard.getType() == StockyardType.SAW) {
                 yardLabel.setVisible(false);  // Platznummer ausblenden
                 if (status != null && status.getIngotsCount() > 0) {
-                    if (status.getIngotsCount() == 1) {
-                        // Ein Barren: Nummer anzeigen
-                        countLabel.setText(status.getIngotNumber() != null ? status.getIngotNumber() : "1");
-                        countLabel.getStyle()
-                            .set("font-size", "9px")
-                            .set("text-align", "center")
-                            .set("word-break", "break-all");
-                    } else {
-                        // Mehrere Barren: Anzahl als Warteschlange anzeigen
-                        countLabel.setText(status.getIngotsCount() + " ⏳");
-                        countLabel.getStyle()
-                            .set("font-size", "12px")
-                            .set("text-align", "center");
-                    }
+                    // Immer die Barren-Nummer anzeigen (erster in der Warteschlange)
+                    String displayText = status.getIngotNumber() != null ? status.getIngotNumber() : "-";
+                    countLabel.setText(displayText);
+                    countLabel.getStyle()
+                        .set("font-size", "9px")
+                        .set("text-align", "center")
+                        .set("word-break", "break-all");
                 } else {
                     countLabel.setText("-");
                     countLabel.getStyle().set("font-size", "14px");

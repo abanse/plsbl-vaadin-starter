@@ -22,6 +22,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDateTime;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.stream.Collectors;
 import java.util.stream.StreamSupport;
@@ -301,11 +302,43 @@ public class IngotStorageService {
     }
 
     /**
+     * Gibt die Liste der Barren in der Warteschlange zurück (sortiert nach Position)
+     */
+    public java.util.List<Map<String, Object>> getQueueItems() {
+        try {
+            Stockyard sawPosition = findSawPosition().orElse(null);
+            if (sawPosition == null) return java.util.Collections.emptyList();
+
+            return jdbcTemplate.queryForList(
+                "SELECT ID, INGOT_NO, PILE_POSITION, LENGTH, WEIGHT FROM TD_INGOT WHERE STOCKYARD_ID = ? ORDER BY PILE_POSITION ASC",
+                sawPosition.getId());
+        } catch (Exception e) {
+            log.warn("Konnte Warteschlange nicht laden: {}", e.getMessage());
+            return java.util.Collections.emptyList();
+        }
+    }
+
+    /**
+     * Entfernt alle Barren von der Säge-Position und gibt die Anzahl zurück.
+     * @return Anzahl der gelöschten Barren
+     */
+    public int clearSawPosition() {
+        Stockyard sawPosition = findSawPosition().orElse(null);
+        if (sawPosition == null) {
+            log.warn("Keine Säge-Position gefunden");
+            return 0;
+        }
+        return clearSawPosition(sawPosition.getId());
+    }
+
+    /**
      * Entfernt alle Barren von der Säge-Position (nur für manuelle Bereinigung).
      * Verwendet direktes SQL für maximale Zuverlässigkeit.
+     * @return Anzahl der gelöschten Barren
      */
-    public void clearSawPosition(Long sawStockyardId) {
+    public int clearSawPosition(Long sawStockyardId) {
         log.info("=== CLEAR SAW POSITION (ID={}) ===", sawStockyardId);
+        int deletedIngots = 0;
 
         // 1. Prüfen was aktuell auf der Säge liegt (Debug)
         try {
@@ -329,7 +362,7 @@ public class IngotStorageService {
 
         // 3. Alle Barren auf der Säge direkt per SQL löschen
         try {
-            int deletedIngots = jdbcTemplate.update(
+            deletedIngots = jdbcTemplate.update(
                 "DELETE FROM TD_INGOT WHERE STOCKYARD_ID = ?", sawStockyardId);
             log.info("Barren gelöscht: {}", deletedIngots);
         } catch (Exception e) {
@@ -345,17 +378,8 @@ public class IngotStorageService {
             log.warn("Fehler beim Löschen des StockyardStatus: {}", e.getMessage());
         }
 
-        // 5. Bestätigen dass Säge jetzt leer ist
-        try {
-            Integer count = jdbcTemplate.queryForObject(
-                "SELECT COUNT(*) FROM TD_INGOT WHERE STOCKYARD_ID = ?",
-                Integer.class, sawStockyardId);
-            log.info("Barren auf Säge nach Löschung: {}", count);
-        } catch (Exception e) {
-            log.warn("Konnte Anzahl nicht prüfen: {}", e.getMessage());
-        }
-
-        log.info("=== SAW POSITION CLEARED ===");
+        log.info("=== SAW POSITION CLEARED ({} Barren) ===", deletedIngots);
+        return deletedIngots;
     }
 
     /**
