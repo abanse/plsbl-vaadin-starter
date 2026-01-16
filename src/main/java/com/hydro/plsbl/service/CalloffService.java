@@ -71,9 +71,16 @@ public class CalloffService {
         try {
             log.info("Erstelle TD_CALLOFF Tabelle...");
 
-            // Tabelle erstellen (H2-kompatibel)
+            // Alte Tabelle löschen falls vorhanden (für Schema-Migration)
+            try {
+                jdbcTemplate.execute("DROP TABLE IF EXISTS TD_CALLOFF");
+            } catch (Exception e) {
+                log.debug("Tabelle existierte nicht: {}", e.getMessage());
+            }
+
+            // Tabelle erstellen (H2-kompatibel mit BOOLEAN statt NUMBER)
             jdbcTemplate.execute("""
-                CREATE TABLE IF NOT EXISTS TD_CALLOFF (
+                CREATE TABLE TD_CALLOFF (
                     ID BIGINT PRIMARY KEY,
                     SERIAL BIGINT DEFAULT 1,
                     TABLESERIAL BIGINT,
@@ -89,8 +96,8 @@ public class CalloffService {
                     AMOUNT_REQUESTED INT,
                     AMOUNT_DELIVERED INT DEFAULT 0,
                     DELIVERY_DATE DATE,
-                    APPROVED NUMBER(1) DEFAULT 0,
-                    COMPLETED NUMBER(1) DEFAULT 0,
+                    APPROVED BOOLEAN DEFAULT FALSE,
+                    COMPLETED BOOLEAN DEFAULT FALSE,
                     RECEIVED TIMESTAMP,
                     NOTES VARCHAR(1000)
                 )
@@ -125,16 +132,16 @@ public class CalloffService {
             // Testdaten für verschiedene Kunden und Ziele
             Object[][] testData = {
                 // ID, TableSerial, CalloffNo, OrderNo, OrderPos, CustomerNo, CustomerName, Address, Dest, SapProduct, Requested, Delivered, DeliveryDate, Approved, Completed
-                {1L, 1L, "ABR-2025-001", "4500001234", "10", "100123", "Hydro Aluminium DE", "Koblenzer Str. 122, 41468 Neuss", "NF2", "MAT-AL-001", 6, 0, today.plusDays(1), 1, 0},
-                {2L, 2L, "ABR-2025-002", "4500001234", "20", "100123", "Hydro Aluminium DE", "Koblenzer Str. 122, 41468 Neuss", "NF2", "MAT-AL-002", 4, 0, today.plusDays(1), 1, 0},
-                {3L, 3L, "ABR-2025-003", "4500001235", "10", "100456", "Aluminium Werk Köln", "Industriestr. 50, 50667 Köln", "LKW", "MAT-AL-001", 8, 2, today, 1, 0},
-                {4L, 4L, "ABR-2025-004", "4500001236", "10", "100789", "Metallbau Schmidt", "Hauptstr. 1, 40210 Düsseldorf", "EXT", "MAT-AL-003", 3, 0, today.plusDays(3), 1, 0},
-                {5L, 5L, "ABR-2025-005", "4500001237", "10", "100111", "Stahlhandel Meyer", "Hafenstr. 25, 47119 Duisburg", "NF2", "MAT-AL-001", 5, 0, today.plusDays(2), 1, 0},
-                {6L, 6L, "ABR-2025-006", "4500001238", "10", "100222", "Automotive GmbH", "Motorweg 10, 44135 Dortmund", "LKW", "MAT-AL-002", 10, 4, today, 1, 0},
-                {7L, 7L, "ABR-2025-007", "4500001239", "10", "100333", "Bau AG", "Betonstr. 5, 45127 Essen", "NF2", "MAT-AL-004", 2, 0, today.plusDays(5), 0, 0},  // Nicht genehmigt
-                {8L, 8L, "ABR-2025-008", "4500001240", "10", "100444", "Technik Plus", "Innovationspark 12, 52064 Aachen", "LKW", "MAT-AL-001", 6, 6, today.minusDays(1), 1, 1},  // Abgeschlossen
-                {9L, 9L, "ABR-2025-009", "4500001241", "10", "100555", "Metall Express", "Schnellweg 99, 41061 Mönchengladbach", "EXT", "MAT-AL-005", 4, 0, today.plusDays(1), 1, 0},
-                {10L, 10L, "ABR-2025-010", "4500001242", "10", "100666", "Industrie Nord", "Fabrikstr. 77, 47798 Krefeld", "NF2", "MAT-AL-001", 7, 3, today, 1, 0},
+                {1L, 1L, "ABR-2025-001", "4500001234", "10", "100123", "Hydro Aluminium DE", "Koblenzer Str. 122, 41468 Neuss", "NF2", "MAT-AL-001", 6, 0, today.plusDays(1), true, false},
+                {2L, 2L, "ABR-2025-002", "4500001234", "20", "100123", "Hydro Aluminium DE", "Koblenzer Str. 122, 41468 Neuss", "NF2", "MAT-AL-002", 4, 0, today.plusDays(1), true, false},
+                {3L, 3L, "ABR-2025-003", "4500001235", "10", "100456", "Aluminium Werk Köln", "Industriestr. 50, 50667 Köln", "LKW", "MAT-AL-001", 8, 2, today, true, false},
+                {4L, 4L, "ABR-2025-004", "4500001236", "10", "100789", "Metallbau Schmidt", "Hauptstr. 1, 40210 Düsseldorf", "EXT", "MAT-AL-003", 3, 0, today.plusDays(3), true, false},
+                {5L, 5L, "ABR-2025-005", "4500001237", "10", "100111", "Stahlhandel Meyer", "Hafenstr. 25, 47119 Duisburg", "NF2", "MAT-AL-001", 5, 0, today.plusDays(2), true, false},
+                {6L, 6L, "ABR-2025-006", "4500001238", "10", "100222", "Automotive GmbH", "Motorweg 10, 44135 Dortmund", "LKW", "MAT-AL-002", 10, 4, today, true, false},
+                {7L, 7L, "ABR-2025-007", "4500001239", "10", "100333", "Bau AG", "Betonstr. 5, 45127 Essen", "NF2", "MAT-AL-004", 2, 0, today.plusDays(5), false, false},  // Nicht genehmigt
+                {8L, 8L, "ABR-2025-008", "4500001240", "10", "100444", "Technik Plus", "Innovationspark 12, 52064 Aachen", "LKW", "MAT-AL-001", 6, 6, today.minusDays(1), true, true},  // Abgeschlossen
+                {9L, 9L, "ABR-2025-009", "4500001241", "10", "100555", "Metall Express", "Schnellweg 99, 41061 Mönchengladbach", "EXT", "MAT-AL-005", 4, 0, today.plusDays(1), true, false},
+                {10L, 10L, "ABR-2025-010", "4500001242", "10", "100666", "Industrie Nord", "Fabrikstr. 77, 47798 Krefeld", "NF2", "MAT-AL-001", 7, 3, today, true, false},
             };
 
             for (Object[] data : testData) {
@@ -383,17 +390,17 @@ public class CalloffService {
             params.add("%" + criteria.getSapProductNumber() + "%");
         }
 
-        // Checkbox-Filter
+        // Checkbox-Filter (BOOLEAN-Spalten)
         if (criteria.isIncompleteOnly()) {
-            sql.append(" AND (COMPLETED = 0 OR COMPLETED IS NULL)");
+            sql.append(" AND (COMPLETED = FALSE OR COMPLETED IS NULL)");
         }
 
         if (criteria.isApprovedOnly()) {
-            sql.append(" AND APPROVED = 1");
+            sql.append(" AND APPROVED = TRUE");
         }
 
         if (criteria.isNotApprovedOnly()) {
-            sql.append(" AND (APPROVED = 0 OR APPROVED IS NULL)");
+            sql.append(" AND (APPROVED = FALSE OR APPROVED IS NULL)");
         }
 
         sql.append(" ORDER BY DELIVERY_DATE ASC NULLS LAST, ID ASC");
@@ -432,11 +439,8 @@ public class CalloffService {
                 dto.setDeliveryDate(deliveryDate.toLocalDate());
             }
 
-            Integer approved = rs.getObject("APPROVED", Integer.class);
-            dto.setApproved(approved != null && approved == 1);
-
-            Integer completed = rs.getObject("COMPLETED", Integer.class);
-            dto.setCompleted(completed != null && completed == 1);
+            dto.setApproved(rs.getBoolean("APPROVED"));
+            dto.setCompleted(rs.getBoolean("COMPLETED"));
 
             java.sql.Timestamp received = rs.getTimestamp("RECEIVED");
             if (received != null) {

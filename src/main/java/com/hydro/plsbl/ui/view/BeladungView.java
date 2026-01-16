@@ -21,6 +21,7 @@ import com.vaadin.flow.component.UI;
 import com.vaadin.flow.component.button.Button;
 import com.vaadin.flow.component.button.ButtonVariant;
 import com.vaadin.flow.component.checkbox.Checkbox;
+import com.vaadin.flow.component.combobox.ComboBox;
 import com.vaadin.flow.component.formlayout.FormLayout;
 import com.vaadin.flow.component.grid.Grid;
 import com.vaadin.flow.component.grid.GridVariant;
@@ -87,7 +88,19 @@ public class BeladungView extends VerticalLayout {
     private static final int TRAILER_Y = 9000;   // Vorderer Bereich (Reihe ~3)
     private static final int TRAILER_Z = 2000;
 
-    // Filter-Felder (wie im Original)
+    // Konfigurations-Felder (wie im Original-Bild)
+    private ComboBox<String> lieferortCombo;
+    private ComboBox<String> lagerplatzArtCombo;
+    private IntegerField maxGewichtField;
+    private IntegerField maxBarrenField;
+    private ComboBox<String> barrenartCombo;
+    private IntegerField minBreiteField;
+    private IntegerField maxBreiteField;
+    private TextField vorzugsabrufField;
+    private Checkbox terminoptimierungCheckbox;
+    private boolean abrufGesperrt = false;
+
+    // Filter-Felder (Suche)
     private TextField calloffNumberField;
     private TextField orderNumberField;
     private TextField customerNumberField;
@@ -96,11 +109,12 @@ public class BeladungView extends VerticalLayout {
     private Checkbox incompleteOnlyCheckbox;
     private Checkbox approvedOnlyCheckbox;
     private Checkbox notApprovedOnlyCheckbox;
-    private IntegerField maxBarrenField;
 
     // Beladungs-Bereich
     private TextField beladungsNrField;
-    private Span gewichtLabel;
+    private Span gewichtVorneLabel;
+    private Span gewichtHintenLabel;
+    private Span gesamtGewichtLabel;
     private Span statusLabel;
     private Span barrenAnzahlLabel;
     private Div ladeflaeche;
@@ -332,103 +346,172 @@ public class BeladungView extends VerticalLayout {
     }
 
     private void createFilterSection() {
-        // Titel
-        H4 filterTitle = new H4("Abrufe suchen");
-        filterTitle.getStyle().set("margin", "0 0 10px 0");
-
-        // Zeile 1: Textfelder
-        HorizontalLayout row1 = new HorizontalLayout();
-        row1.setWidthFull();
-        row1.setSpacing(true);
-        row1.setAlignItems(FlexComponent.Alignment.END);
-
-        calloffNumberField = new TextField("Abrufnummer");
-        calloffNumberField.setPlaceholder("z.B. 12345");
-        calloffNumberField.setWidth("120px");
-        calloffNumberField.setClearButtonVisible(true);
-        calloffNumberField.addValueChangeListener(e -> onSearch());
-
-        orderNumberField = new TextField("Auftragsnummer");
-        orderNumberField.setPlaceholder("z.B. 4500001");
-        orderNumberField.setWidth("120px");
-        orderNumberField.setClearButtonVisible(true);
-        orderNumberField.addValueChangeListener(e -> onSearch());
-
-        customerNumberField = new TextField("Kundennummer");
-        customerNumberField.setPlaceholder("z.B. 100123");
-        customerNumberField.setWidth("100px");
-        customerNumberField.setClearButtonVisible(true);
-        customerNumberField.addValueChangeListener(e -> onSearch());
-
-        destinationField = new TextField("Ziel");
-        destinationField.setPlaceholder("z.B. LKW");
-        destinationField.setWidth("100px");
-        destinationField.setClearButtonVisible(true);
-        destinationField.addValueChangeListener(e -> onSearch());
-
-        sapProductField = new TextField("SAP-Artikel");
-        sapProductField.setPlaceholder("z.B. MAT123");
-        sapProductField.setWidth("120px");
-        sapProductField.setClearButtonVisible(true);
-        sapProductField.addValueChangeListener(e -> onSearch());
-
-        row1.add(calloffNumberField, orderNumberField, customerNumberField, destinationField, sapProductField);
-
-        // Zeile 2: Checkboxen und Buttons
-        HorizontalLayout row2 = new HorizontalLayout();
-        row2.setWidthFull();
-        row2.setSpacing(true);
-        row2.setAlignItems(FlexComponent.Alignment.CENTER);
-
-        incompleteOnlyCheckbox = new Checkbox("Nur offene");
-        incompleteOnlyCheckbox.setValue(true);
-        incompleteOnlyCheckbox.addValueChangeListener(e -> onSearch());
-
-        approvedOnlyCheckbox = new Checkbox("Nur genehmigte");
-        approvedOnlyCheckbox.addValueChangeListener(e -> {
-            if (e.getValue()) {
-                notApprovedOnlyCheckbox.setValue(false);
-            }
-            onSearch();
-        });
-
-        notApprovedOnlyCheckbox = new Checkbox("Nur nicht genehmigte");
-        notApprovedOnlyCheckbox.addValueChangeListener(e -> {
-            if (e.getValue()) {
-                approvedOnlyCheckbox.setValue(false);
-            }
-            onSearch();
-        });
-
-        maxBarrenField = new IntegerField("max. Barren");
-        maxBarrenField.setValue(6);
-        maxBarrenField.setWidth("100px");
-        maxBarrenField.setMin(1);
-        maxBarrenField.setMax(20);
-
-        // Spacer
-        Div spacer = new Div();
-        spacer.getStyle().set("flex-grow", "1");
-
-        Button searchButton = new Button("Suchen", VaadinIcon.SEARCH.create());
-        searchButton.addThemeVariants(ButtonVariant.LUMO_PRIMARY);
-        searchButton.addClickListener(e -> onSearch());
-
-        Button resetButton = new Button("Zurücksetzen", VaadinIcon.REFRESH.create());
-        resetButton.addClickListener(e -> onReset());
-
-        row2.add(incompleteOnlyCheckbox, approvedOnlyCheckbox, notApprovedOnlyCheckbox, maxBarrenField, spacer, searchButton, resetButton);
-
-        VerticalLayout filterSection = new VerticalLayout(filterTitle, row1, row2);
-        filterSection.setPadding(false);
-        filterSection.setSpacing(true);
-        filterSection.getStyle()
+        // Konfigurations-Sektion (wie im Original-Bild)
+        VerticalLayout configSection = new VerticalLayout();
+        configSection.setPadding(false);
+        configSection.setSpacing(true);
+        configSection.getStyle()
             .set("background-color", "#f5f5f5")
             .set("padding", "15px")
             .set("border-radius", "4px")
             .set("margin-bottom", "10px");
 
-        add(filterSection);
+        // Zeile 1: Lieferort, max. Gewicht, max. Anzahl Barren
+        HorizontalLayout row1 = new HorizontalLayout();
+        row1.setWidthFull();
+        row1.setSpacing(true);
+        row1.setAlignItems(FlexComponent.Alignment.BASELINE);
+
+        lieferortCombo = new ComboBox<>("Lieferort");
+        lieferortCombo.setItems("NF2", "NF3", "GIESS", "SAEGE", "LKW", "EXTERN");
+        lieferortCombo.setValue("NF2");
+        lieferortCombo.setWidth("100px");
+
+        maxGewichtField = new IntegerField("max. Gewicht [kg]");
+        maxGewichtField.setValue(64000);
+        maxGewichtField.setWidth("130px");
+        maxGewichtField.setMin(1000);
+        maxGewichtField.setMax(100000);
+        maxGewichtField.setStep(1000);
+
+        maxBarrenField = new IntegerField("max. Anzahl Barren");
+        maxBarrenField.setValue(6);
+        maxBarrenField.setWidth("130px");
+        maxBarrenField.setMin(1);
+        maxBarrenField.setMax(20);
+
+        row1.add(lieferortCombo, maxGewichtField, maxBarrenField);
+
+        // Zeile 2: Lagerplatz-Art, Barrenart, min/max Breite
+        HorizontalLayout row2 = new HorizontalLayout();
+        row2.setWidthFull();
+        row2.setSpacing(true);
+        row2.setAlignItems(FlexComponent.Alignment.BASELINE);
+
+        lagerplatzArtCombo = new ComboBox<>("Lagerplatz-Art");
+        lagerplatzArtCombo.setItems("gemischt", "kurz", "lang");
+        lagerplatzArtCombo.setValue("gemischt");
+        lagerplatzArtCombo.setWidth("120px");
+        lagerplatzArtCombo.getElement().setAttribute("title", "kurz: <4m, lang: >=4m");
+
+        barrenartCombo = new ComboBox<>("Barrenart");
+        barrenartCombo.setItems("gemischt", "Walzbarren", "Pressbolzen", "Rundbarren");
+        barrenartCombo.setValue("gemischt");
+        barrenartCombo.setWidth("130px");
+
+        minBreiteField = new IntegerField("min. Breite [mm]");
+        minBreiteField.setValue(0);
+        minBreiteField.setWidth("120px");
+        minBreiteField.setMin(0);
+        minBreiteField.setMax(9999);
+
+        maxBreiteField = new IntegerField("max. Breite [mm]");
+        maxBreiteField.setValue(9999);
+        maxBreiteField.setWidth("120px");
+        maxBreiteField.setMin(0);
+        maxBreiteField.setMax(9999);
+
+        row2.add(lagerplatzArtCombo, barrenartCombo, minBreiteField, maxBreiteField);
+
+        // Zeile 3: Vorzugsabruf, Abrufe sperren, Terminoptimierung
+        HorizontalLayout row3 = new HorizontalLayout();
+        row3.setWidthFull();
+        row3.setSpacing(true);
+        row3.setAlignItems(FlexComponent.Alignment.BASELINE);
+
+        vorzugsabrufField = new TextField("Vorzugsabruf");
+        vorzugsabrufField.setPlaceholder("Abruf-Nr. eingeben");
+        vorzugsabrufField.setWidth("150px");
+        vorzugsabrufField.setClearButtonVisible(true);
+        vorzugsabrufField.getElement().setAttribute("title", "Priorität für diesen Abruf");
+
+        Button abrufeSperrenBtn = new Button("Abrufe sperren", VaadinIcon.LOCK.create());
+        abrufeSperrenBtn.addClickListener(e -> toggleAbrufSperre(abrufeSperrenBtn));
+
+        terminoptimierungCheckbox = new Checkbox("Terminoptimierung?");
+        terminoptimierungCheckbox.setValue(true);
+        terminoptimierungCheckbox.getElement().setAttribute("title", "Abrufe nach Liefertermin sortieren");
+
+        // Spacer
+        Div spacer = new Div();
+        spacer.getStyle().set("flex-grow", "1");
+
+        row3.add(vorzugsabrufField, abrufeSperrenBtn, terminoptimierungCheckbox, spacer);
+
+        // Zeile 4: Filter für Abruf-Suche (erweitert)
+        HorizontalLayout row4 = new HorizontalLayout();
+        row4.setWidthFull();
+        row4.setSpacing(true);
+        row4.setAlignItems(FlexComponent.Alignment.BASELINE);
+
+        calloffNumberField = new TextField("Abruf-Nr.");
+        calloffNumberField.setPlaceholder("z.B. 12345");
+        calloffNumberField.setWidth("100px");
+        calloffNumberField.setClearButtonVisible(true);
+
+        orderNumberField = new TextField("Auftrags-Nr.");
+        orderNumberField.setPlaceholder("z.B. 4500001");
+        orderNumberField.setWidth("110px");
+        orderNumberField.setClearButtonVisible(true);
+
+        customerNumberField = new TextField("Kunden-Nr.");
+        customerNumberField.setPlaceholder("z.B. 100123");
+        customerNumberField.setWidth("100px");
+        customerNumberField.setClearButtonVisible(true);
+
+        destinationField = new TextField("Ziel");
+        destinationField.setPlaceholder("z.B. LKW");
+        destinationField.setWidth("80px");
+        destinationField.setClearButtonVisible(true);
+
+        sapProductField = new TextField("SAP-Artikel");
+        sapProductField.setPlaceholder("z.B. MAT123");
+        sapProductField.setWidth("100px");
+        sapProductField.setClearButtonVisible(true);
+
+        incompleteOnlyCheckbox = new Checkbox("nur offene");
+        incompleteOnlyCheckbox.setValue(true);
+
+        approvedOnlyCheckbox = new Checkbox("nur genehmigte");
+        approvedOnlyCheckbox.addValueChangeListener(e -> {
+            if (e.getValue()) notApprovedOnlyCheckbox.setValue(false);
+        });
+
+        notApprovedOnlyCheckbox = new Checkbox("nur nicht genehmigte");
+        notApprovedOnlyCheckbox.addValueChangeListener(e -> {
+            if (e.getValue()) approvedOnlyCheckbox.setValue(false);
+        });
+
+        Button searchButton = new Button("Suchen", VaadinIcon.SEARCH.create());
+        searchButton.addThemeVariants(ButtonVariant.LUMO_PRIMARY);
+        searchButton.addClickListener(e -> onSearch());
+
+        Button resetButton = new Button("Reset", VaadinIcon.REFRESH.create());
+        resetButton.addClickListener(e -> onReset());
+
+        row4.add(calloffNumberField, orderNumberField, customerNumberField, destinationField, sapProductField,
+                 incompleteOnlyCheckbox, approvedOnlyCheckbox, searchButton, resetButton);
+
+        configSection.add(row1, row2, row3, row4);
+        add(configSection);
+    }
+
+    private void toggleAbrufSperre(Button btn) {
+        abrufGesperrt = !abrufGesperrt;
+        if (abrufGesperrt) {
+            btn.setText("Abrufe entsperren");
+            btn.setIcon(VaadinIcon.UNLOCK.create());
+            btn.addThemeVariants(ButtonVariant.LUMO_ERROR);
+            Notification.show("Abrufe gesperrt - keine automatische Ermittlung",
+                3000, Notification.Position.BOTTOM_CENTER)
+                .addThemeVariants(NotificationVariant.LUMO_CONTRAST);
+        } else {
+            btn.setText("Abrufe sperren");
+            btn.setIcon(VaadinIcon.LOCK.create());
+            btn.removeThemeVariants(ButtonVariant.LUMO_ERROR);
+            Notification.show("Abrufe entsperrt",
+                2000, Notification.Position.BOTTOM_CENTER);
+        }
     }
 
     private void createMainSection() {
@@ -490,15 +573,25 @@ public class BeladungView extends VerticalLayout {
         beladungsNrField.setReadOnly(true);
         controlSection.add(beladungsNrField);
 
-        // Anzeigen
+        // Gewichts-Anzeigen (wie im Original)
+        FormLayout gewichtForm = new FormLayout();
+        gewichtForm.setResponsiveSteps(new FormLayout.ResponsiveStep("0", 1));
+
+        gewichtVorneLabel = createInfoDisplay("0");
+        gewichtHintenLabel = createInfoDisplay("0");
+        gesamtGewichtLabel = createInfoDisplay("0");
+
+        gewichtForm.addFormItem(gewichtVorneLabel, "Gewicht vorne [kg]");
+        gewichtForm.addFormItem(gewichtHintenLabel, "Gewicht hinten [kg]");
+        gewichtForm.addFormItem(gesamtGewichtLabel, "Gesamtgewicht [kg]");
+        controlSection.add(gewichtForm);
+
+        // Fortschritts-Anzeigen
         FormLayout infoForm = new FormLayout();
         infoForm.setResponsiveSteps(new FormLayout.ResponsiveStep("0", 1));
 
         barrenAnzahlLabel = createInfoDisplay("0 / 0");
-        gewichtLabel = createInfoDisplay("0 kg");
-
         infoForm.addFormItem(barrenAnzahlLabel, "Fortschritt");
-        infoForm.addFormItem(gewichtLabel, "Gesamtgewicht");
         controlSection.add(infoForm);
 
         // Aktions-Buttons
@@ -1119,7 +1212,8 @@ public class BeladungView extends VerticalLayout {
     }
 
     /**
-     * Ermittelt die Barren für die Beladung basierend auf Calloff oder max. Anzahl
+     * Ermittelt die Barren für die Beladung basierend auf Konfiguration
+     * Berücksichtigt: Vorzugsabruf, Lagerplatz-Art, Gewichtsgrenzen, Terminoptimierung
      */
     private void ermittleBarren() {
         if (!beladungAktiv) {
@@ -1129,41 +1223,121 @@ public class BeladungView extends VerticalLayout {
             return;
         }
 
+        if (abrufGesperrt) {
+            Notification.show("Abrufe sind gesperrt! Bitte entsperren.",
+                3000, Notification.Position.MIDDLE)
+                .addThemeVariants(NotificationVariant.LUMO_WARNING);
+            return;
+        }
+
         geplanteBarren.clear();
         geladeneBarren.clear();
 
-        int anzahl = maxBarrenField.getValue() != null ? maxBarrenField.getValue() : 6;
+        // Konfigurations-Parameter auslesen
+        int maxAnzahl = maxBarrenField.getValue() != null ? maxBarrenField.getValue() : 6;
+        int maxGewicht = maxGewichtField.getValue() != null ? maxGewichtField.getValue() : 64000;
+        int minBreite = minBreiteField.getValue() != null ? minBreiteField.getValue() : 0;
+        int maxBreite = maxBreiteField.getValue() != null ? maxBreiteField.getValue() : 9999;
+        String lagerplatzArt = lagerplatzArtCombo.getValue();
+        String vorzugsabruf = vorzugsabrufField.getValue();
 
-        // Prüfen ob ein Calloff ausgewählt ist
+        // Vorzugsabruf zuerst prüfen
+        CalloffDTO priorityCalloff = null;
+        if (vorzugsabruf != null && !vorzugsabruf.trim().isEmpty()) {
+            try {
+                var optionalCalloff = calloffService.findByCalloffNumber(vorzugsabruf.trim());
+                if (optionalCalloff.isPresent() && optionalCalloff.get().getRemainingAmount() > 0) {
+                    priorityCalloff = optionalCalloff.get();
+                    log.info("Vorzugsabruf gefunden: {} mit {} offenen Barren",
+                        priorityCalloff.getCalloffNumber(), priorityCalloff.getRemainingAmount());
+                    selectedCalloff = priorityCalloff;
+                    calloffGrid.select(priorityCalloff);
+                } else {
+                    Notification.show("Vorzugsabruf nicht gefunden oder bereits vollständig: " + vorzugsabruf,
+                        4000, Notification.Position.MIDDLE)
+                        .addThemeVariants(NotificationVariant.LUMO_WARNING);
+                }
+            } catch (Exception e) {
+                log.warn("Fehler beim Suchen des Vorzugsabrufs: {}", e.getMessage());
+            }
+        }
+
+        // Wenn kein Vorzugsabruf, verwende ausgewählten Calloff oder ältesten
+        if (priorityCalloff == null && selectedCalloff == null) {
+            // Ältesten genehmigten Abruf finden (Terminoptimierung)
+            if (terminoptimierungCheckbox.getValue()) {
+                try {
+                    var criteria = new CalloffSearchCriteria();
+                    criteria.setIncompleteOnly(true);
+                    criteria.setApprovedOnly(true);
+                    var calloffs = calloffService.searchByCriteria(criteria);
+                    if (!calloffs.isEmpty()) {
+                        selectedCalloff = calloffs.get(0);  // Ältester (nach Liefertermin sortiert)
+                        log.info("Automatisch ältesten Abruf ausgewählt: {}", selectedCalloff.getCalloffNumber());
+                    }
+                } catch (Exception e) {
+                    log.warn("Fehler bei der automatischen Abruf-Auswahl: {}", e.getMessage());
+                }
+            }
+        }
+
+        // Anzahl bestimmen
+        int anzahl = maxAnzahl;
         if (selectedCalloff != null) {
             anzahl = Math.min(anzahl, selectedCalloff.getRemainingAmount());
             log.info("Ermittle {} Barren für Calloff {}", anzahl, selectedCalloff.getCalloffNumber());
         }
 
-        // Barrentyp bestimmen (simuliert)
-        langBarrenModus = anzahl <= 4 && Math.random() > 0.5;
+        // Barrentyp basierend auf Lagerplatz-Art bestimmen
+        if ("lang".equals(lagerplatzArt)) {
+            langBarrenModus = true;
+            anzahl = Math.min(anzahl, 4);  // Max 4 Langbarren auf Trailer
+        } else if ("kurz".equals(lagerplatzArt)) {
+            langBarrenModus = false;
+        } else {
+            // gemischt: zufällig
+            langBarrenModus = anzahl <= 4 && Math.random() > 0.5;
+        }
 
-        // Test-Barren erstellen
+        // Barren ermitteln mit Gewichts- und Breitenbeschränkung
+        int aktuellesGewicht = 0;
         AtomicInteger counter = new AtomicInteger(1);
-        for (int i = 0; i < anzahl; i++) {
+
+        for (int i = 0; i < anzahl && aktuellesGewicht < maxGewicht; i++) {
             IngotDTO barren = new IngotDTO();
             barren.setId((long) (i + 1));
             barren.setIngotNo("BAR-" + String.format("%03d", counter.getAndIncrement()));
-            barren.setWeight(langBarrenModus ? 12000 : 8500);
-            barren.setLength(langBarrenModus ? 2500 : 1800);
-            barren.setStockyardNo("L" + String.format("%02d", (i % 5) + 1));
-            geplanteBarren.add(barren);
+
+            // Gewicht und Maße basierend auf Modus
+            int barrenGewicht = langBarrenModus ? 12000 : 8500;
+            int barrenBreite = langBarrenModus ? 600 : 450;
+
+            // Prüfen ob Barren in Grenzen passt
+            if (barrenBreite >= minBreite && barrenBreite <= maxBreite &&
+                aktuellesGewicht + barrenGewicht <= maxGewicht) {
+
+                barren.setWeight(barrenGewicht);
+                barren.setLength(langBarrenModus ? 4500 : 2500);
+                barren.setWidth(barrenBreite);
+                barren.setStockyardNo("L" + String.format("%02d", (i % 5) + 1));
+
+                geplanteBarren.add(barren);
+                aktuellesGewicht += barrenGewicht;
+            }
         }
 
         updateAnzeigen();
         updateLadeflaeche();
 
         startenBtn.setEnabled(!geplanteBarren.isEmpty());
-        statusLabel.setText(geplanteBarren.size() + " Barren ermittelt - bereit zum Laden");
+
+        String modus = langBarrenModus ? "Lang-Barren" : "Kurz-Barren";
+        String message = String.format("%d %s ermittelt (Gewicht: %d kg)",
+            geplanteBarren.size(), modus, aktuellesGewicht);
+        statusLabel.setText(message + " - bereit zum Laden");
         statusLabel.getStyle().set("color", "#4CAF50");
 
-        Notification.show(geplanteBarren.size() + " Barren für Beladung ermittelt",
-            3000, Notification.Position.BOTTOM_CENTER)
+        Notification.show(message, 3000, Notification.Position.BOTTOM_CENTER)
             .addThemeVariants(NotificationVariant.LUMO_SUCCESS);
     }
 
@@ -1463,15 +1637,40 @@ public class BeladungView extends VerticalLayout {
         int gesamt = geladeneBarren.size() + geplanteBarren.size();
         barrenAnzahlLabel.setText(geladeneBarren.size() + " / " + gesamt);
 
-        int gewicht = geladeneBarren.stream()
+        // Gewicht berechnen (vorne/hinten Verteilung simuliert)
+        int gesamtGewicht = geladeneBarren.stream()
             .mapToInt(b -> b.getWeight() != null ? b.getWeight() : 0)
             .sum();
-        gewichtLabel.setText(gewicht + " kg");
+
+        // Gewichtsverteilung berechnen: vorne sind die zuerst geladenen Barren
+        int gewichtVorne = 0;
+        int gewichtHinten = 0;
+        for (int i = 0; i < geladeneBarren.size(); i++) {
+            IngotDTO barren = geladeneBarren.get(i);
+            int weight = barren.getWeight() != null ? barren.getWeight() : 0;
+            if (i < geladeneBarren.size() / 2 || geladeneBarren.size() == 1) {
+                gewichtVorne += weight;
+            } else {
+                gewichtHinten += weight;
+            }
+        }
+
+        gewichtVorneLabel.setText(String.valueOf(gewichtVorne));
+        gewichtHintenLabel.setText(String.valueOf(gewichtHinten));
+        gesamtGewichtLabel.setText(String.valueOf(gesamtGewicht));
 
         if (gesamt > 0) {
             fortschrittBar.setValue((double) geladeneBarren.size() / gesamt);
         } else {
             fortschrittBar.setValue(0);
+        }
+
+        // Warnung bei Übergewicht
+        int maxGewicht = maxGewichtField.getValue() != null ? maxGewichtField.getValue() : 64000;
+        if (gesamtGewicht > maxGewicht) {
+            gesamtGewichtLabel.getStyle().set("color", "red");
+        } else {
+            gesamtGewichtLabel.getStyle().set("color", "inherit");
         }
     }
 
