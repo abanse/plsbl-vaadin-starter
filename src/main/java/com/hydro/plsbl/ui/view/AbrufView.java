@@ -3,7 +3,11 @@ package com.hydro.plsbl.ui.view;
 import com.hydro.plsbl.dto.CalloffDTO;
 import com.hydro.plsbl.dto.CalloffSearchCriteria;
 import com.hydro.plsbl.service.CalloffService;
+import com.hydro.plsbl.service.DataBroadcaster;
 import com.hydro.plsbl.ui.MainLayout;
+import com.vaadin.flow.component.AttachEvent;
+import com.vaadin.flow.component.DetachEvent;
+import com.vaadin.flow.component.UI;
 import com.vaadin.flow.component.button.Button;
 import com.vaadin.flow.component.button.ButtonVariant;
 import com.vaadin.flow.component.checkbox.Checkbox;
@@ -19,6 +23,7 @@ import com.vaadin.flow.component.orderedlayout.VerticalLayout;
 import com.vaadin.flow.component.textfield.TextField;
 import com.vaadin.flow.router.PageTitle;
 import com.vaadin.flow.router.Route;
+import com.vaadin.flow.shared.Registration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -41,6 +46,8 @@ public class AbrufView extends VerticalLayout {
     private static final DateTimeFormatter DATETIME_FORMATTER = DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm");
 
     private final CalloffService calloffService;
+    private final DataBroadcaster dataBroadcaster;
+    private Registration broadcasterRegistration;
 
     // UI Components
     private Grid<CalloffDTO> grid;
@@ -63,8 +70,9 @@ public class AbrufView extends VerticalLayout {
     // Aktuell selektierter Abruf
     private CalloffDTO selectedCalloff;
 
-    public AbrufView(CalloffService calloffService) {
+    public AbrufView(CalloffService calloffService, DataBroadcaster dataBroadcaster) {
         this.calloffService = calloffService;
+        this.dataBroadcaster = dataBroadcaster;
 
         setSizeFull();
         setPadding(true);
@@ -75,6 +83,39 @@ public class AbrufView extends VerticalLayout {
         createGrid();
         createActionBar();
         loadData();
+    }
+
+    @Override
+    protected void onAttach(AttachEvent attachEvent) {
+        super.onAttach(attachEvent);
+
+        // Registriere für Daten-Updates
+        broadcasterRegistration = dataBroadcaster.register(event -> {
+            if (event.getType() == DataBroadcaster.DataEventType.CALLOFF_CHANGED ||
+                event.getType() == DataBroadcaster.DataEventType.REFRESH_ALL) {
+                log.info("AbrufView: Received {} event", event.getType());
+                // Hole die aktuelle UI direkt
+                getUI().ifPresent(currentUi -> {
+                    log.info("AbrufView: Got UI, pushing update...");
+                    currentUi.access(() -> {
+                        log.info("AbrufView: Inside ui.access(), loading data...");
+                        loadData();
+                        log.info("AbrufView: Data reloaded via broadcast");
+                    });
+                });
+            }
+        });
+        log.info("AbrufView attached, broadcaster registered");
+    }
+
+    @Override
+    protected void onDetach(DetachEvent detachEvent) {
+        super.onDetach(detachEvent);
+        if (broadcasterRegistration != null) {
+            broadcasterRegistration.remove();
+            broadcasterRegistration = null;
+        }
+        log.debug("AbrufView detached, broadcaster unregistered");
     }
 
     private void createHeader() {

@@ -7,9 +7,11 @@ import com.hydro.plsbl.dto.TransportOrderDTO;
 import com.hydro.plsbl.plc.PlcService;
 import com.hydro.plsbl.plc.dto.PlcCommand;
 import com.hydro.plsbl.plc.dto.JobState;
+import com.hydro.plsbl.plc.dto.WorkPhase;
 import com.hydro.plsbl.service.BeladungBroadcaster;
 import com.hydro.plsbl.service.BeladungStateService;
 import com.hydro.plsbl.service.CalloffService;
+import com.hydro.plsbl.service.DataBroadcaster;
 import com.hydro.plsbl.service.IngotService;
 import com.hydro.plsbl.service.SettingsService;
 import com.hydro.plsbl.service.StockyardService;
@@ -81,6 +83,8 @@ public class BeladungView extends VerticalLayout {
     private final SettingsService settingsService;
     private final BeladungStateService stateService;
     private final BeladungBroadcaster broadcaster;
+    private final DataBroadcaster dataBroadcaster;
+    private com.vaadin.flow.shared.Registration dataBroadcasterRegistration;
 
     // Trailer-Position (in mm) - Position des Trailers im Lager-Grid (sichtbar!)
     // Muss innerhalb des sichtbaren Lager-Bereichs liegen (ca. X=6000-48000, Y=6000-24000)
@@ -154,7 +158,8 @@ public class BeladungView extends VerticalLayout {
                         PlcService plcService,
                         SettingsService settingsService,
                         BeladungStateService stateService,
-                        BeladungBroadcaster broadcaster) {
+                        BeladungBroadcaster broadcaster,
+                        DataBroadcaster dataBroadcaster) {
         this.ingotService = ingotService;
         this.stockyardService = stockyardService;
         this.transportOrderService = transportOrderService;
@@ -163,6 +168,7 @@ public class BeladungView extends VerticalLayout {
         this.settingsService = settingsService;
         this.stateService = stateService;
         this.broadcaster = broadcaster;
+        this.dataBroadcaster = dataBroadcaster;
 
         setSizeFull();
         setPadding(true);
@@ -180,6 +186,25 @@ public class BeladungView extends VerticalLayout {
     protected void onAttach(AttachEvent attachEvent) {
         super.onAttach(attachEvent);
         scheduler = Executors.newSingleThreadScheduledExecutor();
+        UI ui = attachEvent.getUI();
+
+        // Registriere für Daten-Updates (Calloff-Änderungen)
+        dataBroadcasterRegistration = dataBroadcaster.register(event -> {
+            if (event.getType() == DataBroadcaster.DataEventType.CALLOFF_CHANGED ||
+                event.getType() == DataBroadcaster.DataEventType.REFRESH_ALL) {
+                log.info("BeladungView: Received {} event", event.getType());
+                // Hole die aktuelle UI direkt
+                getUI().ifPresent(currentUi -> {
+                    log.info("BeladungView: Got UI, pushing update...");
+                    currentUi.access(() -> {
+                        log.info("BeladungView: Inside ui.access(), loading data...");
+                        onSearch();
+                        log.info("BeladungView: Calloff data reloaded via broadcast");
+                    });
+                });
+            }
+        });
+        log.info("BeladungView attached, data broadcaster registered");
 
         // Status aus Session wiederherstellen
         restoreStateFromService();
@@ -191,6 +216,12 @@ public class BeladungView extends VerticalLayout {
 
         // Status in Session speichern (NICHT stoppen!)
         saveStateToService();
+
+        // DataBroadcaster-Registrierung aufheben
+        if (dataBroadcasterRegistration != null) {
+            dataBroadcasterRegistration.remove();
+            dataBroadcasterRegistration = null;
+        }
 
         // Nur den Scheduler stoppen, nicht die Beladung abbrechen
         if (beladungsTask != null) {
@@ -295,15 +326,22 @@ public class BeladungView extends VerticalLayout {
                     // Mit Kran: Status prüfen
                     var plcStatus = plcService.getCurrentStatus();
                     JobState jobState = plcStatus != null ? plcStatus.getJobState() : null;
+                    WorkPhase workPhase = plcStatus != null ? plcStatus.getWorkPhase() : null;
+
+                    // DEBUG Logging
+                    log.info("=== BELADUNG POLL: jobState={}, workPhase={}, kranKommandoGesendet={}, geplant={}, geladen={} ===",
+                        jobState, workPhase, kranKommandoGesendet, geplanteBarren.size(), geladeneBarren.size());
 
                     if (jobState == JobState.IDLE && !kranKommandoGesendet && !geplanteBarren.isEmpty()) {
                         // Kran ist bereit - nächsten Barren senden
                         IngotDTO barren = geplanteBarren.get(0);
+                        log.info(">>> Sende Kran-Kommando für Barren {}", barren.getIngotNo());
                         sendeCranKommando(barren);
                         kranKommandoGesendet = true;
                         statusLabel.setText("Kran holt " + barren.getIngotNo() + " vom Lager...");
                     } else if (jobState == JobState.IDLE && kranKommandoGesendet) {
                         // Job fertig - Barren als geladen markieren
+                        log.info(">>> Job fertig - markiere Barren als geladen");
                         if (!geplanteBarren.isEmpty()) {
                             IngotDTO barren = geplanteBarren.remove(0);
                             geladeneBarren.add(barren);
@@ -323,6 +361,7 @@ public class BeladungView extends VerticalLayout {
                         String phase = plcStatus != null && plcStatus.getWorkPhase() != null
                             ? plcStatus.getWorkPhase().getDisplayName() : "arbeitet...";
                         statusLabel.setText("Kran: " + phase);
+                        log.debug("Kran arbeitet: jobState={}, phase={}", jobState, phase);
                     }
                 } else {
                     // Ohne Kran: direkt laden
@@ -341,6 +380,7 @@ public class BeladungView extends VerticalLayout {
                         }
                     }
                 }
+                ui.push();  // UI sofort aktualisieren
             });
         }, 500, 800, TimeUnit.MILLISECONDS);
     }
@@ -1440,6 +1480,7 @@ public class BeladungView extends VerticalLayout {
                     }
                     statusLabel.setText("Kran: " + phase);
                 }
+                ui.push();  // UI sofort aktualisieren
             });
         }, 1000, 800, TimeUnit.MILLISECONDS);
     }
@@ -1558,6 +1599,7 @@ public class BeladungView extends VerticalLayout {
                 } else {
                     beladungFertig();
                 }
+                ui.push();  // UI sofort aktualisieren
             });
         }, 500, 1000, TimeUnit.MILLISECONDS);
     }

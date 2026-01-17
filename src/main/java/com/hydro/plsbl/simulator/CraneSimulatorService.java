@@ -206,20 +206,31 @@ public class CraneSimulatorService {
 
     // === Private Methods ===
 
+    private int tickCounter = 0;
+
     /**
      * Ein Simulationsschritt
      */
     private void tick() {
+        tickCounter++;
+        // Logge jeden 50. Tick um zu sehen ob Scheduler läuft (alle 5 Sekunden bei 100ms Intervall)
+        if (tickCounter % 50 == 0) {
+            log.info("TICK #{}: running={}, jobState={}, phase={}", tickCounter, running, jobState, workPhase);
+        }
         try {
-            nextState();
-            updateDatabase();
-            // Debug: Logge Position alle 10 Ticks wenn Auftrag läuft
-            if (jobState != JobState.IDLE && simCount % 5 == 0) {
-                log.debug("Tick: pos=({},{},{}), phase={}, job={}, gripper={}",
-                    xPosition, yPosition, zPosition, workPhase, jobState, gripperState);
+            // Logge jeden Tick wenn Job aktiv
+            if (jobState != JobState.IDLE) {
+                log.info("TICK START #{}: pos=({},{},{}), phase={}, job={}, simCount={}",
+                    tickCounter, xPosition, yPosition, zPosition, workPhase, jobState, simCount);
             }
+            nextState();
+            if (jobState != JobState.IDLE) {
+                log.info("TICK END #{}: pos=({},{},{}), phase={}, job={}, simCount={}",
+                    tickCounter, xPosition, yPosition, zPosition, workPhase, jobState, simCount);
+            }
+            updateDatabase();
         } catch (Exception e) {
-            log.error("Simulator tick error", e);
+            log.error("Simulator tick error at tick #{}", tickCounter, e);
         }
     }
 
@@ -234,12 +245,16 @@ public class CraneSimulatorService {
             return;
         }
 
+        WorkPhase prevPhase = workPhase;
+        JobState prevJobState = jobState;
+
         switch (workPhase) {
             case IDLE:
                 // Zum Abholen fahren (erst auf Höhe gehen)
                 if (moveZ(config.getDefaultZ())) {
                     workPhase = WorkPhase.MOVE_TO_PICKUP;
                     simCount = 0;
+                    log.info(">>> SIMULATOR: Phase IDLE -> MOVE_TO_PICKUP");
                 }
                 break;
 
@@ -248,6 +263,7 @@ public class CraneSimulatorService {
                 if (moveXY(currentCommand.getPickupX(), currentCommand.getPickupY()) && simCount > 1) {
                     workPhase = WorkPhase.LOWERING_TO_PICKUP;
                     simCount = 0;
+                    log.info(">>> SIMULATOR: Phase MOVE_TO_PICKUP -> LOWERING_TO_PICKUP");
                 }
                 break;
 
@@ -256,6 +272,7 @@ public class CraneSimulatorService {
                 if (moveZ(currentCommand.getPickupZ()) && simCount > 1) {
                     workPhase = WorkPhase.GRABBING;
                     simCount = 0;
+                    log.info(">>> SIMULATOR: Phase LOWERING_TO_PICKUP -> GRABBING");
                 }
                 break;
 
@@ -265,6 +282,7 @@ public class CraneSimulatorService {
                 if (simCount > 2) {
                     workPhase = WorkPhase.LIFTING_INGOT;
                     simCount = 0;
+                    log.info(">>> SIMULATOR: Phase GRABBING -> LIFTING_INGOT");
                 }
                 break;
 
@@ -274,6 +292,7 @@ public class CraneSimulatorService {
                 if (moveZ(config.getDefaultZ()) && simCount > 1) {
                     workPhase = WorkPhase.MOVE_TO_DESTINATION;
                     simCount = 0;
+                    log.info(">>> SIMULATOR: Phase LIFTING_INGOT -> MOVE_TO_DESTINATION, jobState=LOADED");
                 }
                 break;
 
@@ -282,6 +301,7 @@ public class CraneSimulatorService {
                 if (moveXY(currentCommand.getReleaseX(), currentCommand.getReleaseY()) && simCount > 1) {
                     workPhase = WorkPhase.LOWERING_TO_DROP;
                     simCount = 0;
+                    log.info(">>> SIMULATOR: Phase MOVE_TO_DESTINATION -> LOWERING_TO_DROP");
                 }
                 break;
 
@@ -290,6 +310,7 @@ public class CraneSimulatorService {
                 if (moveZ(currentCommand.getReleaseZ()) && simCount > 1) {
                     workPhase = WorkPhase.RELEASE_INGOT;
                     simCount = 0;
+                    log.info(">>> SIMULATOR: Phase LOWERING_TO_DROP -> RELEASE_INGOT");
                 }
                 break;
 
@@ -300,6 +321,7 @@ public class CraneSimulatorService {
                 if (simCount > 2) {
                     workPhase = WorkPhase.LIFTING_EMPTY;
                     simCount = 0;
+                    log.info(">>> SIMULATOR: Phase RELEASE_INGOT -> LIFTING_EMPTY, jobState=DROPPED");
                 }
                 break;
 
@@ -318,7 +340,7 @@ public class CraneSimulatorService {
                     int finalY = currentCommand != null ? currentCommand.getReleaseY() : yPosition;
                     currentCommand = null;
                     simCount = 0;
-                    log.info("Job completed, crane stays at destination ({}, {}, {})", finalX, finalY, zPosition);
+                    log.info(">>> SIMULATOR: Job COMPLETED! Phase=IDLE, jobState=IDLE, pos=({}, {}, {})", finalX, finalY, zPosition);
                 }
                 break;
         }

@@ -33,10 +33,13 @@ public class CalloffService {
 
     private final CalloffRepository calloffRepository;
     private final JdbcTemplate jdbcTemplate;
+    private final DataBroadcaster dataBroadcaster;
 
-    public CalloffService(CalloffRepository calloffRepository, JdbcTemplate jdbcTemplate) {
+    public CalloffService(CalloffRepository calloffRepository, JdbcTemplate jdbcTemplate,
+                          DataBroadcaster dataBroadcaster) {
         this.calloffRepository = calloffRepository;
         this.jdbcTemplate = jdbcTemplate;
+        this.dataBroadcaster = dataBroadcaster;
     }
 
     /**
@@ -280,11 +283,14 @@ public class CalloffService {
      */
     @Transactional
     public void approve(Long calloffId) {
+        log.info("approve() aufgerufen für ID: {}", calloffId);
         calloffRepository.findById(calloffId).ifPresent(calloff -> {
             calloff.setApproved(true);
             calloff.markNotNew();
             calloffRepository.save(calloff);
-            log.info("Calloff {} genehmigt", calloff.getCalloffNumber());
+            log.info("Calloff {} genehmigt, sende Broadcast...", calloff.getCalloffNumber());
+            dataBroadcaster.broadcast(DataBroadcaster.DataEventType.CALLOFF_CHANGED);
+            log.info("Broadcast CALLOFF_CHANGED gesendet");
         });
     }
 
@@ -293,11 +299,14 @@ public class CalloffService {
      */
     @Transactional
     public void revokeApproval(Long calloffId) {
+        log.info("revokeApproval() aufgerufen für ID: {}", calloffId);
         calloffRepository.findById(calloffId).ifPresent(calloff -> {
             calloff.setApproved(false);
             calloff.markNotNew();
             calloffRepository.save(calloff);
-            log.info("Genehmigung für Calloff {} widerrufen", calloff.getCalloffNumber());
+            log.info("Genehmigung für Calloff {} widerrufen, sende Broadcast...", calloff.getCalloffNumber());
+            dataBroadcaster.broadcast(DataBroadcaster.DataEventType.CALLOFF_CHANGED);
+            log.info("Broadcast CALLOFF_CHANGED gesendet");
         });
     }
 
@@ -306,11 +315,14 @@ public class CalloffService {
      */
     @Transactional
     public void complete(Long calloffId) {
+        log.info("complete() aufgerufen für ID: {}", calloffId);
         calloffRepository.findById(calloffId).ifPresent(calloff -> {
             calloff.setCompleted(true);
             calloff.markNotNew();
             calloffRepository.save(calloff);
-            log.info("Calloff {} abgeschlossen", calloff.getCalloffNumber());
+            log.info("Calloff {} abgeschlossen, sende Broadcast...", calloff.getCalloffNumber());
+            dataBroadcaster.broadcast(DataBroadcaster.DataEventType.CALLOFF_CHANGED);
+            log.info("Broadcast CALLOFF_CHANGED gesendet");
         });
     }
 
@@ -332,6 +344,7 @@ public class CalloffService {
             calloffRepository.save(calloff);
             log.info("Calloff {} - {} Einheiten geliefert (gesamt: {})",
                 calloff.getCalloffNumber(), amount, calloff.getAmountDelivered());
+            dataBroadcaster.broadcast(DataBroadcaster.DataEventType.CALLOFF_CHANGED);
         });
     }
 
