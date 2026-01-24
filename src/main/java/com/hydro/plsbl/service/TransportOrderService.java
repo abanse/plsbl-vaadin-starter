@@ -10,6 +10,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.sql.Timestamp;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -81,47 +82,65 @@ public class TransportOrderService {
     public TransportOrderDTO save(TransportOrderDTO dto) {
         log.debug("Saving transport order: {}", dto.getId());
 
-        TransportOrder entity;
-        if (dto.getId() != null) {
-            // Update - mark as not new so Spring Data JDBC does UPDATE instead of INSERT
-            entity = orderRepository.findById(dto.getId())
+        if (dto.getId() == null) {
+            // CREATE - Direktes SQL für Oracle-Kompatibilität
+            Long nextId = getNextId();
+            Long nextSerial = getNextTableSerial();
+            dto.setId(nextId);
+            dto.setTableSerial(nextSerial);
+
+            // Basis-INSERT nur mit Spalten die sicher existieren
+            Timestamp defaultTime = Timestamp.valueOf(LocalDateTime.of(1970, 1, 1, 0, 0, 0));
+
+            jdbcTemplate.update(
+                "INSERT INTO TD_TRANSPORTORDER (ID, SERIAL, TABLESERIAL, TRANSPORT_NO, NORMTEXT, " +
+                "CALLOFF_ID, INGOT_ID, FROM_YARD_ID, FROM_PILE_POSITION, TO_YARD_ID, TO_PILE_POSITION, " +
+                "PRINTED, DELIVERED) " +
+                "VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                nextId,
+                nextSerial,
+                dto.getTransportNo(),
+                dto.getNormText(),
+                dto.getCalloffId(),
+                dto.getIngotId(),
+                dto.getFromYardId(),
+                dto.getFromPilePosition(),
+                dto.getToYardId(),
+                dto.getToPilePosition(),
+                defaultTime,
+                defaultTime
+            );
+
+            log.info("Transport order created via SQL: ID={}, transportNo={}", nextId, dto.getTransportNo());
+            return dto;
+        } else {
+            // UPDATE - Repository verwenden
+            TransportOrder entity = orderRepository.findById(dto.getId())
                 .orElseThrow(() -> new IllegalArgumentException("Auftrag nicht gefunden: " + dto.getId()));
             entity.markNotNew();
-        } else {
-            // Create - ID, TableSerial und Timestamps setzen (NOT NULL in Oracle)
-            entity = new TransportOrder();
-            Long nextId = getNextId();
-            entity.setId(nextId);
-            Long nextSerial = getNextTableSerial();
-            entity.setTableSerial(nextSerial);
-            // Default-Timestamps für NOT NULL Spalten (1970-01-01 = nicht gesetzt)
-            LocalDateTime notSet = LocalDateTime.of(1970, 1, 1, 0, 0, 0);
-            entity.setPrinted(notSet);
-            entity.setDelivered(notSet);
+
+            // Werte übernehmen
+            entity.setTransportNo(dto.getTransportNo());
+            entity.setNormText(dto.getNormText());
+            entity.setIngotId(dto.getIngotId());
+            entity.setFromYardId(dto.getFromYardId());
+            entity.setFromPilePosition(dto.getFromPilePosition());
+            entity.setToYardId(dto.getToYardId());
+            entity.setToPilePosition(dto.getToPilePosition());
+            entity.setCalloffId(dto.getCalloffId());
+            entity.setPriority(dto.getPriority() != null ? dto.getPriority() : 0);
+
+            if (dto.getStatus() != null) {
+                entity.setOrderStatus(dto.getStatus());
+            } else if (entity.getStatus() == null) {
+                entity.setOrderStatus(OrderStatus.PENDING);
+            }
+
+            TransportOrder saved = orderRepository.save(entity);
+            log.info("Transport order updated: ID={}", saved.getId());
+
+            return toDTO(saved);
         }
-
-        // Werte übernehmen
-        entity.setTransportNo(dto.getTransportNo());
-        entity.setNormText(dto.getNormText());
-        entity.setIngotId(dto.getIngotId());
-        entity.setFromYardId(dto.getFromYardId());
-        entity.setFromPilePosition(dto.getFromPilePosition());
-        entity.setToYardId(dto.getToYardId());
-        entity.setToPilePosition(dto.getToPilePosition());
-        entity.setCalloffId(dto.getCalloffId());
-        entity.setPriority(dto.getPriority() != null ? dto.getPriority() : 0);
-
-        // Status setzen - Default ist PENDING für neue Aufträge
-        if (dto.getStatus() != null) {
-            entity.setOrderStatus(dto.getStatus());
-        } else if (entity.getStatus() == null) {
-            entity.setOrderStatus(OrderStatus.PENDING);
-        }
-
-        TransportOrder saved = orderRepository.save(entity);
-        log.info("Transport order saved with ID: {}", saved.getId());
-
-        return toDTO(saved);
     }
 
     private Long getNextId() {
@@ -186,6 +205,37 @@ public class TransportOrderService {
         return orderRepository.findActiveOrders().stream()
             .map(this::toDTO)
             .collect(Collectors.toList());
+    }
+
+    /**
+     * Findet alle AKTIVEN Aufträge für einen Lagerplatz (als Quelle ODER Ziel)
+     * Abgeschlossene, fehlgeschlagene und abgebrochene Aufträge werden nicht angezeigt.
+     */
+    public List<TransportOrderDTO> findByStockyardId(Long stockyardId) {
+        log.debug("Loading active transport orders for stockyard: {}", stockyardId);
+        List<TransportOrder> fromOrders = orderRepository.findByFromYardId(stockyardId);
+        List<TransportOrder> toOrders = orderRepository.findByToYardId(stockyardId);
+
+        // Zusammenführen, Duplikate entfernen und nur AKTIVE Aufträge behalten
+        java.util.Set<Long> seenIds = new java.util.HashSet<>();
+        java.util.List<TransportOrderDTO> result = new java.util.ArrayList<>();
+
+        for (TransportOrder order : fromOrders) {
+            // Nur aktive Aufträge (PENDING, IN_PROGRESS, PICKED_UP, PAUSED)
+            if (order.getOrderStatus() != null && order.getOrderStatus().isActive() && seenIds.add(order.getId())) {
+                result.add(toDTO(order));
+            }
+        }
+        for (TransportOrder order : toOrders) {
+            // Nur aktive Aufträge (PENDING, IN_PROGRESS, PICKED_UP, PAUSED)
+            if (order.getOrderStatus() != null && order.getOrderStatus().isActive() && seenIds.add(order.getId())) {
+                result.add(toDTO(order));
+            }
+        }
+
+        // Nach ID absteigend sortieren (neueste zuerst)
+        result.sort((a, b) -> Long.compare(b.getId(), a.getId()));
+        return result;
     }
 
     /**

@@ -8,9 +8,12 @@ import com.hydro.plsbl.plc.dto.PlcCommand;
 import com.hydro.plsbl.service.BeladungBroadcaster;
 import com.hydro.plsbl.service.BeladungStateService;
 import com.hydro.plsbl.service.CraneStatusService;
+import com.hydro.plsbl.service.DataBroadcaster;
+import com.hydro.plsbl.service.DataBroadcaster.DataEventType;
 import com.hydro.plsbl.service.IngotService;
 import com.hydro.plsbl.service.SettingsService;
 import com.hydro.plsbl.service.StockyardService;
+import com.hydro.plsbl.service.TransportOrderService;
 import com.hydro.plsbl.simulator.CraneSimulatorCommand;
 import com.hydro.plsbl.simulator.CraneSimulatorService;
 import com.hydro.plsbl.ui.MainLayout;
@@ -41,6 +44,7 @@ import org.slf4j.LoggerFactory;
 import com.vaadin.flow.shared.Registration;
 
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.Executors;
@@ -65,8 +69,8 @@ public class LagerView extends VerticalLayout {
     private static final int CRANE_UPDATE_INTERVAL_MS = 200;
     // Daten-Refresh-Intervall (alle X Kran-Updates)
     private static final int DATA_REFRESH_MULTIPLIER = 15;  // ~3 Sekunden
-    // Säge-Lagerplatz ID
-    private static final Long SAW_STOCKYARD_ID = 1001L;
+    // Säge-Lagerplatz ID (wird dynamisch ermittelt)
+    private Long sawStockyardId = null;
 
     private final StockyardService stockyardService;
     private final IngotService ingotService;
@@ -76,7 +80,10 @@ public class LagerView extends VerticalLayout {
     private final PlcService plcService;
     private final BeladungStateService beladungStateService;
     private final BeladungBroadcaster beladungBroadcaster;
+    private final TransportOrderService transportOrderService;
+    private final DataBroadcaster dataBroadcaster;
     private Registration broadcasterRegistration;
+    private Registration dataBroadcasterRegistration;
     private LagerGrid lagerGrid;
     private TextField searchField;
     private Map<Long, StockyardDTO> allStockyards = new LinkedHashMap<>();
@@ -103,7 +110,8 @@ public class LagerView extends VerticalLayout {
     public LagerView(StockyardService stockyardService, IngotService ingotService,
                      CraneStatusService craneStatusService, CraneSimulatorService simulatorService,
                      SettingsService settingsService, PlcService plcService,
-                     BeladungStateService beladungStateService, BeladungBroadcaster beladungBroadcaster) {
+                     BeladungStateService beladungStateService, BeladungBroadcaster beladungBroadcaster,
+                     TransportOrderService transportOrderService, DataBroadcaster dataBroadcaster) {
         this.stockyardService = stockyardService;
         this.ingotService = ingotService;
         this.craneStatusService = craneStatusService;
@@ -112,6 +120,8 @@ public class LagerView extends VerticalLayout {
         this.plcService = plcService;
         this.beladungStateService = beladungStateService;
         this.beladungBroadcaster = beladungBroadcaster;
+        this.transportOrderService = transportOrderService;
+        this.dataBroadcaster = dataBroadcaster;
 
         setSizeFull();
         setPadding(true);
@@ -143,16 +153,31 @@ public class LagerView extends VerticalLayout {
             });
         });
 
+        // DataBroadcaster registrieren für Lagerplatz-Updates (z.B. nach Transport-Abschluss)
+        dataBroadcasterRegistration = dataBroadcaster.register(event -> {
+            if (event.getType() == DataEventType.STOCKYARD_CHANGED ||
+                event.getType() == DataEventType.REFRESH_ALL) {
+                ui.access(() -> {
+                    log.info("DataBroadcaster event empfangen: {} - Aktualisiere Lagerplätze", event.getType());
+                    refreshStockyardData();
+                });
+            }
+        });
+
         // Initialen Status setzen
         updateTrailerDisplay();
     }
 
     @Override
     protected void onDetach(DetachEvent detachEvent) {
-        // Broadcaster-Registrierung aufheben
+        // Broadcaster-Registrierungen aufheben
         if (broadcasterRegistration != null) {
             broadcasterRegistration.remove();
             broadcasterRegistration = null;
+        }
+        if (dataBroadcasterRegistration != null) {
+            dataBroadcasterRegistration.remove();
+            dataBroadcasterRegistration = null;
         }
         // Kran-Updates stoppen
         stopCraneUpdates();
@@ -453,10 +478,23 @@ public class LagerView extends VerticalLayout {
         log.info("Loading stockyard data...");
 
         try {
+            // Aktuelle Ziel-Markierung merken bevor Grid neu aufgebaut wird
+            Long previousTargetId = lagerGrid.getTargetStockyardId();
+
             allStockyards = stockyardService.findAllForStockView();
             log.info("Loaded {} stockyards", allStockyards.size());
 
             lagerGrid.setStockyards(allStockyards);
+
+            // Ziel-Markierung wiederherstellen wenn noch ein aktiver Transport läuft
+            if (previousTargetId != null) {
+                Optional<Long> activeTarget = stockyardService.findActiveTransportOrderTarget();
+                if (activeTarget.isPresent()) {
+                    Long effectiveTargetId = resolveToLongStockyardIfNeeded(activeTarget.get());
+                    log.info("Ziel-Markierung wiederhergestellt nach loadData: ID={}", effectiveTargetId);
+                    lagerGrid.setTargetStockyard(effectiveTargetId);
+                }
+            }
         } catch (Exception e) {
             log.error("Error loading stockyards", e);
 
@@ -506,40 +544,65 @@ public class LagerView extends VerticalLayout {
     /**
      * Prüft den Säge-Status und markiert/löscht den Ziel-Lagerplatz.
      * Der Ziel-Platz wird aus dem Transport-Auftrag geholt (nicht geschätzt).
-     * Wenn die Säge leer wird, wird die Markierung gelöscht.
+     * Die Markierung bleibt bestehen, solange ein Transport aktiv ist (Kran unterwegs).
+     *
+     * WICHTIG: Aktive Transporte haben IMMER Vorrang - die Markierung wird nicht gelöscht
+     * solange ein Transport läuft (IN_PROGRESS oder PICKED_UP).
      */
     private void checkSawAndUpdateTarget(Map<Long, StockyardDTO> stockyards) {
-        StockyardDTO sawYard = stockyards.get(SAW_STOCKYARD_ID);
-        if (sawYard == null) {
-            log.debug("SAW Stockyard nicht gefunden (ID={})", SAW_STOCKYARD_ID);
+        // 1. ZUERST prüfen ob ein aktiver Transport läuft (IN_PROGRESS oder PICKED_UP)
+        // Wenn ja, diese Markierung IMMER beibehalten - nicht löschen!
+        Optional<Long> activeTarget = stockyardService.findActiveTransportOrderTarget();
+        if (activeTarget.isPresent()) {
+            // Transport läuft - Markierung setzen/beibehalten (NICHT löschen!)
+            Long effectiveTargetId = resolveToLongStockyardIfNeeded(activeTarget.get());
+            Long currentTarget = lagerGrid.getTargetStockyardId();
+            if (currentTarget == null || !currentTarget.equals(effectiveTargetId)) {
+                log.info(">>> AKTIVER TRANSPORT - MARKIERE ZIEL: ID={} (effektiv: {}) <<<",
+                    activeTarget.get(), effectiveTargetId);
+                lagerGrid.setTargetStockyard(effectiveTargetId);
+            }
+            // previousSawIngotCount nicht ändern während Transport läuft
             return;
         }
 
-        int currentSawIngotCount = sawYard.getStatus() != null ? sawYard.getStatus().getIngotsCount() : 0;
+        // 2. Kein aktiver Transport - jetzt Säge-Status prüfen
+        StockyardDTO sawYard = findSawStockyard(stockyards);
+        if (sawYard == null) {
+            log.debug("SAW Stockyard nicht gefunden");
+            // Kein aktiver Transport und keine Säge -> Markierung löschen
+            if (lagerGrid.getTargetStockyardId() != null) {
+                lagerGrid.clearTargetStockyard();
+            }
+            return;
+        }
 
-        // Säge leer? -> Markierung löschen
+        // WICHTIG: Barren DIREKT aus TD_INGOT zählen, nicht aus Status (kann veraltet sein!)
+        int currentSawIngotCount = ingotService.countByStockyardId(sawYard.getId());
+        log.debug("Säge-Barren-Anzahl (direkt aus DB): {}", currentSawIngotCount);
+
+        // 3. Säge leer und kein aktiver Transport -> Markierung löschen
         if (currentSawIngotCount == 0) {
             if (lagerGrid.getTargetStockyardId() != null) {
-                log.info(">>> SÄGE LEER - LÖSCHE MARKIERUNG <<<");
+                log.info(">>> SÄGE LEER UND KEIN AKTIVER TRANSPORT - LÖSCHE MARKIERUNG <<<");
                 lagerGrid.clearTargetStockyard();
             }
             previousSawIngotCount = 0;
             return;
         }
 
-        // Anzahl hat sich geändert? -> Markierung aktualisieren (nächster Barren könnte anderes Ziel haben)
+        // 4. Säge hat Barren - Ziel für ersten Barren markieren
+        // Nur aktualisieren wenn Anzahl geändert oder keine Markierung vorhanden
         boolean countChanged = currentSawIngotCount != previousSawIngotCount;
         boolean noTargetMarked = lagerGrid.getTargetStockyardId() == null;
 
         if (countChanged || noTargetMarked) {
             if (countChanged) {
                 log.info(">>> BARRENANZAHL GEÄNDERT: {} -> {} <<<", previousSawIngotCount, currentSawIngotCount);
-                // Alte Markierung löschen
-                lagerGrid.clearTargetStockyard();
             }
 
             log.info(">>> {} BARREN IN WARTESCHLANGE - SUCHE ZIEL FÜR ERSTEN <<<", currentSawIngotCount);
-            var ingots = ingotService.findByStockyardId(SAW_STOCKYARD_ID);
+            var ingots = ingotService.findByStockyardId(sawYard.getId());
             if (!ingots.isEmpty()) {
                 // Ersten Barren in der Warteschlange nehmen (niedrigste Position = ältester)
                 IngotDTO firstIngot = ingots.stream()
@@ -556,15 +619,71 @@ public class LagerView extends VerticalLayout {
                 // Ziel-Lagerplatz aus Transport-Auftrag holen
                 Optional<Long> targetYardId = findTargetYardFromTransportOrder(firstIngot.getId());
                 if (targetYardId.isPresent()) {
-                    log.info(">>> MARKIERE ZIEL-PLATZ: ID={} <<<", targetYardId.get());
-                    lagerGrid.setTargetStockyard(targetYardId.get());
+                    Long effectiveTargetId = resolveToLongStockyardIfNeeded(targetYardId.get());
+                    log.info(">>> MARKIERE ZIEL-PLATZ: ID={} (effektiv: {}) <<<", targetYardId.get(), effectiveTargetId);
+                    lagerGrid.setTargetStockyard(effectiveTargetId);
                 } else {
                     log.debug("Kein Transport-Auftrag für Barren {} gefunden", firstIngot.getIngotNo());
+                    // Keine alte Markierung löschen - könnte noch gültig sein
                 }
             }
         }
 
         previousSawIngotCount = currentSawIngotCount;
+    }
+
+    /**
+     * Findet den Säge-Stockyard aus der Map (YARD_TYPE = 'S' / SAW)
+     */
+    private StockyardDTO findSawStockyard(Map<Long, StockyardDTO> stockyards) {
+        // Cached ID verwenden wenn vorhanden
+        if (sawStockyardId != null) {
+            StockyardDTO saw = stockyards.get(sawStockyardId);
+            if (saw != null) {
+                return saw;
+            }
+        }
+
+        // Säge nach Typ suchen
+        for (StockyardDTO yard : stockyards.values()) {
+            if (yard.getType() == com.hydro.plsbl.entity.enums.StockyardType.SAW) {
+                sawStockyardId = yard.getId();  // Cache für nächsten Aufruf
+                log.info("SAW Stockyard gefunden: {} (ID={})", yard.getYardNumber(), yard.getId());
+                return yard;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Löst eine Lagerplatz-ID zu einem LONG-Lagerplatz auf, falls der Platz
+     * von einem LONG "verschluckt" wurde.
+     *
+     * Beispiel: 12/07 wurde zu 13/07 (LONG) zusammengefügt.
+     * Diese Methode gibt dann 13/07's ID zurück statt 12/07's ID.
+     *
+     * WICHTIG: Prüft IMMER auf LONG-Abdeckung, auch wenn der Platz in der DB existiert,
+     * weil der Platz visuell trotzdem von einem LONG überdeckt sein kann.
+     *
+     * @param stockyardId Original-Lagerplatz-ID
+     * @return Die LONG-Lagerplatz-ID falls abgedeckt, sonst die Original-ID
+     */
+    private Long resolveToLongStockyardIfNeeded(Long stockyardId) {
+        // IMMER prüfen ob es einen LONG gibt, der diese Position abdeckt
+        // (auch wenn der Platz selbst noch in der DB existiert)
+        try {
+            Optional<Long> longId = stockyardService.findCoveringLongStockyard(stockyardId);
+            if (longId.isPresent()) {
+                log.info("Lagerplatz ID={} wird von LONG ID={} abgedeckt", stockyardId, longId.get());
+                return longId.get();
+            }
+        } catch (Exception e) {
+            log.debug("Kein LONG gefunden für ID={}: {}", stockyardId, e.getMessage());
+        }
+
+        // Kein LONG gefunden - Original-ID zurückgeben
+        return stockyardId;
     }
 
     /**
@@ -612,8 +731,8 @@ public class LagerView extends VerticalLayout {
             return;
         }
 
-        // Info-Dialog öffnen mit IngotService, StockyardService und PlcService
-        StockyardInfoDialog dialog = new StockyardInfoDialog(stockyard, ingotService, stockyardService, plcService);
+        // Info-Dialog öffnen mit allen Services
+        StockyardInfoDialog dialog = new StockyardInfoDialog(stockyard, ingotService, stockyardService, plcService, transportOrderService);
         dialog.setOnEdit(this::openEditDialog);
         dialog.setOnIngotEdit(this::openIngotEditDialog);
         dialog.setOnRelocated(v -> loadData()); // Nach Umlagern Grid aktualisieren
@@ -708,13 +827,36 @@ public class LagerView extends VerticalLayout {
         int releaseY = destination.getYPosition() > 0 ? destination.getYPosition() : gridToMmY(destination.getYCoordinate());
         int releaseZ = destination.getZPosition() > 0 ? destination.getZPosition() : 2000;
 
+        // Barren-Daten vom Quell-Lagerplatz laden (oberster Barren)
+        int ingotLength = 5000;
+        int ingotWidth = 500;
+        int ingotThickness = 200;
+        int ingotWeight = 1500;
+        boolean isLongIngot = false;
+
+        List<IngotDTO> sourceIngots = ingotService.findByStockyardId(source.getId());
+        if (!sourceIngots.isEmpty()) {
+            IngotDTO topIngot = sourceIngots.get(sourceIngots.size() - 1);
+            ingotLength = topIngot.getLength() != null ? topIngot.getLength() : 5000;
+            ingotWidth = topIngot.getWidth() != null ? topIngot.getWidth() : 500;
+            ingotThickness = topIngot.getThickness() != null ? topIngot.getThickness() : 200;
+            ingotWeight = topIngot.getWeight() != null ? topIngot.getWeight() : 1500;
+            isLongIngot = ingotLength > 6000;
+        }
+
+        // Offset für lange Barren: 500mm nach links (höhere X-Werte)
+        // Dies entspricht dem Verhalten der echten SPS
+        if (isLongIngot) {
+            releaseX += 500;
+        }
+
         // PlcCommand erstellen
         PlcCommand cmd = PlcCommand.builder()
             .pickupPosition(pickupX, pickupY, pickupZ)
             .releasePosition(releaseX, releaseY, releaseZ)
-            .dimensions(5000, 500, 200)  // Default Barren-Maße (L x B x H)
-            .weight(1500)
-            .longIngot(false)
+            .dimensions(ingotLength, ingotWidth, ingotThickness)
+            .weight(ingotWeight)
+            .longIngot(isLongIngot)
             .rotate(false)
             .build();
 
@@ -947,15 +1089,10 @@ public class LagerView extends VerticalLayout {
             }
         }
 
-        // mm zu Grid-Koordinaten konvertieren
-        int gridX = mmToGridX(xMm);
-        int gridY = mmToGridY(yMm);
+        // Direkt mm-Koordinaten an LagerGrid senden
+        lagerGrid.setCranePosition(xMm, yMm, zMm);
 
-        // Grid-Position setzen (ohne Begrenzung, erlaubt Positionen außerhalb für Säge etc.)
-        lagerGrid.setCraneGridPosition(gridX, gridY);
-
-        log.debug("Crane (PLC): Phase={}, Pos=({},{},{})mm -> Grid({},{})",
-                plcStatus.getWorkPhase(), xMm, yMm, zMm, gridX, gridY);
+        log.debug("Crane (PLC): Phase={}, Pos=({},{},{})mm", plcStatus.getWorkPhase(), xMm, yMm, zMm);
     }
 
     /**
@@ -1000,15 +1137,10 @@ public class LagerView extends VerticalLayout {
             }
         }
 
-        // mm zu Grid-Koordinaten konvertieren
-        int gridX = mmToGridX(xMm);
-        int gridY = mmToGridY(yMm);
+        // Direkt mm-Koordinaten an LagerGrid senden (keine Grid-Konvertierung mehr!)
+        lagerGrid.setCranePosition(xMm, yMm, zMm);
 
-        // Grid-Position setzen (ohne Begrenzung, erlaubt Positionen außerhalb für Säge etc.)
-        lagerGrid.setCraneGridPosition(gridX, gridY);
-
-        log.debug("Crane (Simulator): Phase={}, Pos=({},{},{})mm -> Grid({},{})",
-                simStatus.workPhase(), xMm, yMm, zMm, gridX, gridY);
+        log.debug("Crane (Simulator): Phase={}, Pos=({},{},{})mm", simStatus.workPhase(), xMm, yMm, zMm);
     }
 
     /**
@@ -1054,16 +1186,11 @@ public class LagerView extends VerticalLayout {
             }
         }
 
-        // mm zu Grid-Koordinaten konvertieren
-        int gridX = mmToGridX(xMm);
-        int gridY = mmToGridY(yMm);
+        // Direkt mm-Koordinaten an LagerGrid senden
+        lagerGrid.setCranePosition(xMm, yMm, zMm);
 
-        // Grid-Position setzen (ohne Begrenzung, erlaubt Positionen außerhalb für Säge etc.)
-        lagerGrid.setCraneGridPosition(gridX, gridY);
-
-        log.debug("Crane updated: Mode={}, State={}, Pos=({},{},{})mm -> Grid({},{})",
-                status.getCraneMode(), status.getJobState(),
-                xMm, yMm, zMm, gridX, gridY);
+        log.debug("Crane updated: Mode={}, State={}, Pos=({},{},{})mm",
+                status.getCraneMode(), status.getJobState(), xMm, yMm, zMm);
     }
 
     /**

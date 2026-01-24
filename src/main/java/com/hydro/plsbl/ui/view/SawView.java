@@ -1400,9 +1400,45 @@ public class SawView extends VerticalLayout {
             (yard.getStatus() != null ? " - " + yard.getStatus().getIngotsCount() + " Barren" : " - leer")
         );
 
-        // Verfügbare Lagerplätze laden (nicht volle)
+        // Verfügbare Lagerplätze laden (nicht volle, mit Kapazitätsprüfung V2)
+        log.info(">>> SawView: Lade verfügbare Lagerplätze (findAvailableDestinations V2) <<<");
         java.util.List<StockyardDTO> destinations = stockyardService.findAvailableDestinations();
-        stockyardCombo.setItems(destinations);
+        log.info(">>> SawView: {} Lagerplätze vom Service geladen <<<", destinations.size());
+
+        // ZUSÄTZLICHE SICHERHEITSPRÜFUNG: Nochmal volle/gesperrte Plätze filtern
+        // (direkte Prüfung in der UI als Backup)
+        java.util.List<StockyardDTO> filteredDestinations = destinations.stream()
+            .filter(dest -> {
+                // Prüfung 1: Einlagern erlaubt?
+                if (!dest.isToStockAllowed()) {
+                    log.warn("!!! WARNUNG: Service hat gesperrten Platz {} zurückgegeben - wird gefiltert !!!",
+                        dest.getYardNumber());
+                    return false;
+                }
+
+                // Prüfung 2: Nicht voll?
+                int count = dest.getStatus() != null ? dest.getStatus().getIngotsCount() : 0;
+                int max = dest.getMaxIngots();
+                boolean isFull = count >= max;
+                if (isFull) {
+                    log.warn("!!! WARNUNG: Service hat vollen Platz {} zurückgegeben ({}/{}) - wird gefiltert !!!",
+                        dest.getYardNumber(), count, max);
+                    return false;
+                }
+                return true;
+            })
+            .collect(java.util.stream.Collectors.toList());
+
+        log.info(">>> SawView: Nach zusätzlicher Filterung: {} Lagerplätze <<<", filteredDestinations.size());
+
+        // DEBUG: Zeige alle angebotenen Plätze
+        for (StockyardDTO dest : filteredDestinations) {
+            int count = dest.getStatus() != null ? dest.getStatus().getIngotsCount() : 0;
+            log.info(">>> ANGEBOTEN: {} mit {} Barren (max={}) <<<",
+                dest.getYardNumber(), count, dest.getMaxIngots());
+        }
+
+        stockyardCombo.setItems(filteredDestinations);
 
         if (destinations.isEmpty()) {
             Notification.show("Keine verfügbaren Ziel-Lagerplätze gefunden!", 3000, Notification.Position.MIDDLE)

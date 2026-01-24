@@ -410,6 +410,13 @@ public class UmlagernDialog extends Dialog {
         int width = topIngot.getWidth() != null ? topIngot.getWidth() : 500;
         int thickness = topIngot.getThickness() != null ? topIngot.getThickness() : 200;
         int weight = topIngot.getWeight() != null ? topIngot.getWeight() : 1500;
+        boolean isLongIngot = length > 6000;
+
+        // Offset für lange Barren: 500mm nach links (höhere X-Werte)
+        // Dies entspricht dem Verhalten der echten SPS
+        if (isLongIngot) {
+            releaseX += 500;
+        }
 
         // PlcCommand erstellen
         PlcCommand cmd = PlcCommand.builder()
@@ -417,7 +424,7 @@ public class UmlagernDialog extends Dialog {
             .releasePosition(releaseX, releaseY, releaseZ)
             .dimensions(length, width, thickness)
             .weight(weight)
-            .longIngot(length > 6000)
+            .longIngot(isLongIngot)
             .rotate(false)
             .build();
 

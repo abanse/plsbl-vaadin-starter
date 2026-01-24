@@ -1,5 +1,6 @@
 package com.hydro.plsbl.service;
 
+import com.hydro.plsbl.dto.IngotDTO;
 import com.hydro.plsbl.dto.StockyardDTO;
 import com.hydro.plsbl.dto.TransportOrderDTO;
 import com.hydro.plsbl.entity.enums.OrderStatus;
@@ -9,6 +10,7 @@ import com.hydro.plsbl.plc.dto.JobState;
 import com.hydro.plsbl.plc.dto.PlcCommand;
 import com.hydro.plsbl.plc.dto.PlcStatus;
 import com.hydro.plsbl.plc.dto.WorkPhase;
+import com.hydro.plsbl.service.DataBroadcaster.DataEventType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -41,6 +43,7 @@ public class TransportOrderProcessor {
     private final StockyardService stockyardService;
     private final IngotService ingotService;
     private final PlcService plcService;
+    private final DataBroadcaster dataBroadcaster;
 
     // Aktueller Auftrag in Bearbeitung
     private final AtomicReference<TransportOrderDTO> currentOrder = new AtomicReference<>();
@@ -56,11 +59,13 @@ public class TransportOrderProcessor {
     public TransportOrderProcessor(TransportOrderService orderService,
                                    StockyardService stockyardService,
                                    IngotService ingotService,
-                                   PlcService plcService) {
+                                   PlcService plcService,
+                                   DataBroadcaster dataBroadcaster) {
         this.orderService = orderService;
         this.stockyardService = stockyardService;
         this.ingotService = ingotService;
         this.plcService = plcService;
+        this.dataBroadcaster = dataBroadcaster;
 
         // PlcService Status-Listener für Fortschritts-Tracking
         plcService.addStatusListener(this::onPlcStatusUpdate);
@@ -234,13 +239,60 @@ public class TransportOrderProcessor {
             StockyardDTO fromYard = fromYardOpt.get();
             StockyardDTO toYard = toYardOpt.get();
 
-            // Kran-Befehl erstellen
+            // Barren-Daten laden für korrekte Dimensionen und longIngot-Flag
+            int ingotLength = 5000;  // Default
+            int ingotWidth = 500;
+            int ingotThickness = 200;
+            int ingotWeight = 1500;
+            boolean isLongIngot = false;
+
+            if (order.getIngotId() != null) {
+                Optional<IngotDTO> ingotOpt = ingotService.findById(order.getIngotId());
+                if (ingotOpt.isPresent()) {
+                    IngotDTO ingot = ingotOpt.get();
+                    ingotLength = ingot.getLength() != null ? ingot.getLength() : 5000;
+                    ingotWidth = ingot.getWidth() != null ? ingot.getWidth() : 500;
+                    ingotThickness = ingot.getThickness() != null ? ingot.getThickness() : 200;
+                    ingotWeight = ingot.getWeight() != null ? ingot.getWeight() : 1500;
+                    // Langer Barren wenn > 6000mm
+                    isLongIngot = ingotLength > 6000;
+                    log.info("Barren geladen: {} - Länge={}mm, longIngot={}",
+                        ingot.getIngotNo(), ingotLength, isLongIngot);
+                }
+            }
+
+            // Ziel-Koordinaten berechnen
+            int releaseX = toYard.getXPosition();
+            int releaseY = toYard.getYPosition();
+            int releaseZ = toYard.getZPosition();
+
+            // Offset für lange Barren: 500mm nach links (höhere X-Werte)
+            // Dies entspricht dem Verhalten der echten SPS
+            if (isLongIngot) {
+                releaseX += 500;
+                log.info("LONG INGOT OFFSET: X-Position um 500mm angepasst ({} -> {})",
+                    toYard.getXPosition(), releaseX);
+            }
+
+            // DEBUG: Koordinaten loggen
+            log.info("=== KOORDINATEN DEBUG ===");
+            log.info("FROM Yard: {} (ID={}) -> X={}, Y={}, Z={}",
+                fromYard.getYardNumber(), fromYard.getId(),
+                fromYard.getXPosition(), fromYard.getYPosition(), fromYard.getZPosition());
+            log.info("TO Yard: {} (ID={}) -> X={}, Y={}, Z={} (DB-Wert)",
+                toYard.getYardNumber(), toYard.getId(),
+                toYard.getXPosition(), toYard.getYPosition(), toYard.getZPosition());
+            log.info("Release Position: X={}, Y={}, Z={} (mit Offset)", releaseX, releaseY, releaseZ);
+            log.info("Barren: Länge={}mm, isLongIngot={}", ingotLength, isLongIngot);
+            log.info("=========================");
+
+            // Kran-Befehl erstellen mit echten Barren-Daten
             PlcCommand cmd = PlcCommand.builder()
                 .pickupPosition(fromYard.getXPosition(), fromYard.getYPosition(), fromYard.getZPosition())
-                .releasePosition(toYard.getXPosition(), toYard.getYPosition(), toYard.getZPosition())
-                .dimensions(5000, 500, 200)  // TODO: Aus Barren laden
-                .weight(1500)
-                .longIngot(false)
+                .releasePosition(releaseX, releaseY, releaseZ)
+                .dimensions(ingotLength, ingotWidth, ingotThickness)
+                .weight(ingotWeight)
+                .longIngot(isLongIngot)
                 .rotate(false)
                 .build();
 
@@ -324,6 +376,12 @@ public class TransportOrderProcessor {
 
         notifyOrderCompleted(order);
         notifyStatusChange("Auftrag " + order.getTransportNo() + " abgeschlossen");
+
+        // UI-Views benachrichtigen, dass sich Lagerplatz-Daten geändert haben
+        if (dataBroadcaster != null) {
+            dataBroadcaster.broadcast(DataEventType.STOCKYARD_CHANGED);
+            log.info("STOCKYARD_CHANGED broadcast gesendet");
+        }
     }
 
     /**

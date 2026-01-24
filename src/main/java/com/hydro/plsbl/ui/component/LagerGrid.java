@@ -31,6 +31,7 @@ public class LagerGrid extends Div {
     private static final Logger log = LoggerFactory.getLogger(LagerGrid.class);
 
     private final Map<Long, StockyardButton> buttonMap = new HashMap<>();
+    private Map<Long, StockyardDTO> allStockyardsMap = new HashMap<>();  // Alle Stockyards inkl. versteckter
     private Consumer<StockyardDTO> clickListener;
     private Runnable trailerClickListener;
     private SettingsService settingsService;
@@ -66,6 +67,76 @@ public class LagerGrid extends Div {
     private int craneBaseGridY = 5;  // Basis-Position für Animation (Mitte)
     private boolean craneVisible = true;
 
+    // Lager-Grenzen für mm-zu-Pixel Umrechnung (dynamisch aus Stockyards berechnet)
+    private int stockMinX = 9000;    // Default, wird überschrieben
+    private int stockMaxX = 97000;
+    private int stockMinY = 11000;
+    private int stockMaxY = 37000;
+
+    // Aktuelle Kran-Position in mm (für direkte Positionierung)
+    private int craneMmX = 27000;
+    private int craneMmY = 18000;
+
+    /**
+     * Berechnet die Lager-Grenzen dynamisch aus INTERNAL und SAW Stockyards
+     *
+     * Koordinatensystem (aus Oracle):
+     * - X: 96740 (17/xx, links im UI) bis 9300 (Säge, rechts im UI)
+     * - Y: 6270 (xx/01, unten) bis 35630 (xx/10, oben)
+     *
+     * AUSGANG-Plätze (00/01-00/08) werden NICHT einbezogen, da sie
+     * dieselben X-Koordinaten wie die Säge haben aber separat dargestellt werden.
+     */
+    private void calculateStockBounds(Collection<StockyardDTO> stockyards) {
+        if (stockyards == null || stockyards.isEmpty()) {
+            log.warn("Keine Stockyards für Grenzen-Berechnung vorhanden, nutze Defaults");
+            return;
+        }
+
+        int minX = Integer.MAX_VALUE;
+        int maxX = Integer.MIN_VALUE;
+        int minY = Integer.MAX_VALUE;
+        int maxY = Integer.MIN_VALUE;
+        int count = 0;
+
+        for (StockyardDTO yard : stockyards) {
+            // INTERNAL und SAW Plätze für die Grenzen-Berechnung verwenden
+            // AUSGANG wird ausgeschlossen (hat gleiche X wie SAW, wird separat dargestellt)
+            StockyardType type = yard.getType();
+            if (type != StockyardType.INTERNAL && type != StockyardType.SAW) {
+                continue;
+            }
+
+            Integer x = yard.getXPosition();  // BOTTOM_CENTER_X
+            Integer y = yard.getYPosition();  // BOTTOM_CENTER_Y
+
+            if (x != null && x > 0) {
+                if (x < minX) minX = x;
+                if (x > maxX) maxX = x;
+                count++;
+            }
+            if (y != null && y > 0) {
+                if (y < minY) minY = y;
+                if (y > maxY) maxY = y;
+            }
+        }
+
+        // Nur aktualisieren wenn gültige Werte gefunden wurden
+        if (minX != Integer.MAX_VALUE && maxX != Integer.MIN_VALUE) {
+            // Etwas Rand hinzufügen für bessere Darstellung
+            this.stockMinX = minX - 1000;
+            this.stockMaxX = maxX + 1000;
+            log.info("Stock bounds X: {} - {} (aus {} Stockyards, inkl. SAW)", stockMinX, stockMaxX, count);
+        }
+
+        if (minY != Integer.MAX_VALUE && maxY != Integer.MIN_VALUE) {
+            // Etwas Rand hinzufügen für bessere Darstellung
+            this.stockMinY = minY - 1000;
+            this.stockMaxY = maxY + 1000;
+            log.info("Stock bounds Y: {} - {} (aus {} Stockyards, inkl. SAW)", stockMinY, stockMaxY, count);
+        }
+    }
+
     public LagerGrid() {
         this(null);
     }
@@ -91,16 +162,15 @@ public class LagerGrid extends Div {
     }
 
     private void updateGridTemplate() {
-        // Spalten-Layout (von links nach rechts) - 27 Spalten:
+        // Spalten-Layout (von links nach rechts) - 28 Spalten:
         // 1: Linker Zaun (6px)
         // 2: Abstand (12px)
         // 3: Y-Achsen-Labels (25px)
-        // 4-10: Lagerplätze X=17 bis X=11 (7 Spalten à 55px)
-        // 11: Vertikaler Zaun rechts von 11/01 (6px)
-        // 12-21: Lagerplätze X=10 bis X=1 (10 Spalten à 55px)
+        // 4-20: Lagerplätze X=17 bis X=1 (17 Spalten à 75px)
+        // 21: Schrott-Plätze 00/01-00/08 (75px) - rechts neben X=1
         // 22: Abstand (12px)
         // 23: Säge-Bereich / Personen-Tor (70px)
-        // 24: Lagerplätze 00/01-00/08 (55px) - zwischen Säge und Zaun
+        // 24: Abstand (6px)
         // 25: Kleiner Zaun zwischen Toren (6px)
         // 26: Barren-Tor (20px)
         // 27: Rechter Zaun (6px)
@@ -118,18 +188,19 @@ public class LagerGrid extends Div {
         // 19: Beladung unten (45px)
         // 20: Unterer Zaun Beladung (6px)
 
-        // Spalten-Layout ohne extra Zaun-Spalte zwischen X=11 und X=10
-        // Alle Lagerplätze haben jetzt gleichmäßigen Abstand
+        // Spalten-Layout: Ausgangs-Plätze (00/01-00/08) sind Spalte 22, mit Abstand zu X=1
         String colTemplate = FENCE_WIDTH + "px " +      // 1: Linker Zaun
                             FENCE_GAP + "px " +          // 2: Abstand
                             "25px " +                    // 3: Y-Labels
                             "repeat(17, " + CELL_WIDTH + "px) " +  // 4-20: Lager (X=17 bis X=1)
-                            FENCE_GAP + "px " +          // 21: Abstand
-                            "70px " +                    // 22: Säge / Personen-Tor
-                            CELL_WIDTH + "px " +         // 23: Lagerplätze 00/01-00/08
-                            FENCE_WIDTH + "px " +        // 24: Kleiner Zaun zwischen Toren
-                            "20px " +                    // 25: Barren-Tor
-                            FENCE_WIDTH + "px";          // 26: Rechter Zaun
+                            FENCE_GAP + "px " +          // 21: Abstand nach X=1
+                            CELL_WIDTH + "px " +         // 22: Ausgangs-Plätze 00/01-00/08
+                            FENCE_GAP + "px " +          // 23: Abstand
+                            "70px " +                    // 24: Säge / Personen-Tor
+                            FENCE_GAP + "px " +          // 25: Abstand
+                            FENCE_WIDTH + "px " +        // 26: Kleiner Zaun zwischen Toren
+                            "20px " +                    // 27: Barren-Tor
+                            FENCE_WIDTH + "px";          // 28: Rechter Zaun
 
         // Reihen-Layout (von oben nach unten):
         // 1: Säge-Bereich oben (55px)
@@ -174,6 +245,12 @@ public class LagerGrid extends Div {
             add(new Span("Keine Lagerplätze gefunden"));
             return;
         }
+
+        // Alle Stockyards speichern (für LONG-Suche bei Markierungen)
+        allStockyardsMap = new HashMap<>(stockyards);
+
+        // Lager-Grenzen dynamisch aus Stockyards berechnen (wie im Original)
+        calculateStockBounds(stockyards.values());
 
         // Grid-Dimensionen ermitteln (SAW-Plätze ausschließen, da außerhalb des Haupt-Grids)
         int maxX = stockyards.values().stream()
@@ -258,12 +335,11 @@ public class LagerGrid extends Div {
             int gridCol;
             int gridRow;
 
-            // Sonderfall: Schrott-Lagerplätze 00/01 bis 00/08 (X=0) -> Spalte 23
-            // Nach oben verschoben (1 Reihe) und nach links (halbe Zellbreite)
+            // Sonderfall: Ausgangs-Lagerplätze 00/01 bis 00/08 (X=0) -> Spalte 24 (unter der Säge)
+            // Direkt unter der Säge, auf Höhe von Y+1 (00/01 auf Höhe von 01/02, etc.)
             if (xCoord == 0) {
-                gridCol = 23;  // Spalte 23: zwischen Säge und rechtem Zaun
-                gridRow = rows - yard.getYCoordinate() + 4;  // 1 Reihe höher (Richtung Säge)
-                // Linksverschiebung wird unten über margin-left gesetzt
+                gridCol = 24;  // Spalte 24: direkt unter der Säge
+                gridRow = rows - yard.getYCoordinate() + 4;  // 1 Reihe höher (Y+1)
             } else {
                 // Normale Berechnung für X=1 bis X=17
                 gridCol = columns - xCoord + 4;  // X=17 → Spalte 4, X=1 → Spalte 20
@@ -286,11 +362,6 @@ public class LagerGrid extends Div {
                 button.getStyle()
                     .set("grid-column", String.valueOf(gridCol))
                     .set("grid-row", String.valueOf(gridRow));
-            }
-
-            // Schrott-Lagerplätze (X=0) nach links verschieben (halbe Zellbreite)
-            if (xCoord == 0) {
-                button.getStyle().set("margin-left", "-" + (CELL_WIDTH / 2) + "px");
             }
 
             add(button);
@@ -318,11 +389,11 @@ public class LagerGrid extends Div {
      * Unten wird eine Lichtschranke angezeigt (grün = Einlagerung erlaubt)
      */
     private void addSaegeausgang(StockyardDTO sawYard) {
-        // Säge-Container - Reihe 1-3, Spalte 21-22 (kürzer, nicht bis zu den Lagerplätzen)
+        // Säge-Container - Reihe 1-3, Spalte 23-25 (Gap + Säge + Abstand)
         Div saegeContainer = new Div();
         saegeContainer.addClassName("saege-container");
         saegeContainer.getStyle()
-            .set("grid-column", "21 / 23")  // Säge-Bereich (Gap + Säge)
+            .set("grid-column", "23 / 25")  // Säge-Bereich (Gap + Säge)
             .set("grid-row", "1 / 4")       // Nur bis zum Zaun (kürzer)
             .set("margin-left", "-20px")    // Feineinstellung nach links
             .set("display", "flex")
@@ -400,8 +471,7 @@ public class LagerGrid extends Div {
      * - Unterer Zaun: L-förmig für Beladungsfläche (ab Platz 03/02)
      */
     private void addZaun() {
-        // Spalten: 1=linker Zaun, 21=Gap, 26=rechter Zaun
-        // Alle Spalten nach der alten Zaun-Spalte 11 sind um 1 verschoben
+        // Spalten: 1=linker Zaun, 21=Gap, 22=Ausgangs-Plätze, 23=Gap, 24=Säge, 25-26=Abstand/Zaun, 27=Barren-Tor, 28=rechter Zaun
 
         // Beladungsfläche geht von X=7 (links) bis X=3 (rechts)
         // Einheitliche Spaltenberechnung: gridCol = columns - x + 4
@@ -438,34 +508,26 @@ public class LagerGrid extends Div {
             .set("grid-row", "2");
         add(topGate2);
 
-        // Zaun rechts bis zum Säge-Ausgang (Spalte 12-20)
+        // Zaun rechts bis zu den Schrott-Plätzen (Spalte 12-20)
         Div topFence3 = createFenceSegment();
         topFence3.getStyle()
             .set("grid-column", "12 / 21")
             .set("grid-row", "2");
         add(topFence3);
 
-        // Säge-Ausgang (Spalte 22) - OFFEN
-
-        // Zaun zwischen Säge-Ausgang und Tor 3
-        Div topFence3c = createFenceSegment();
-        topFence3c.getStyle()
-            .set("grid-column", "22 / 24")
-            .set("grid-row", "2")
-            .set("margin-left", "50px");
-        add(topFence3c);
-
-        // Tor 3 oberhalb von Platz 00/08 (Spalte 24)
-        Div topGate3 = createNumberedGate(3, "Oben bei 00/08");
-        topGate3.getStyle()
-            .set("grid-column", "24")
+        // Zaun vor Säge-Ausgang (Spalte 21-23)
+        Div topFence3b = createFenceSegment();
+        topFence3b.getStyle()
+            .set("grid-column", "21 / 24")
             .set("grid-row", "2");
-        add(topGate3);
+        add(topFence3b);
 
-        // Zaun rechts von Tor 3 (Spalte 25-26)
+        // Säge-Ausgang und Ausgangs-Plätze (Spalte 24) - OFFEN für Säge/Kran
+
+        // Zaun zwischen Säge-Ausgang und rechtem Zaun (Spalte 25-28)
         Div topFence4 = createFenceSegment();
         topFence4.getStyle()
-            .set("grid-column", "25 / 27")
+            .set("grid-column", "25 / 29")
             .set("grid-row", "2");
         add(topFence4);
 
@@ -483,10 +545,10 @@ public class LagerGrid extends Div {
             .set("grid-row", "19");
         add(cornerBottomLeft);
 
-        // ============ RECHTER ZAUN (Spalte 26) ============
+        // ============ RECHTER ZAUN (Spalte 28) ============
         Div rightFence = createFenceSegment();
         rightFence.getStyle()
-            .set("grid-column", "26")
+            .set("grid-column", "28")
             .set("grid-row", "2 / 17");
         add(rightFence);
 
@@ -499,33 +561,47 @@ public class LagerGrid extends Div {
             .set("grid-row", "16");
         add(torSpalte11);
 
-        // Zaun von Spalte 12 bis zu den Toren (Spalte 12-21)
+        // Zaun von Spalte 12 bis zu den Schrott-Plätzen (Spalte 12-21)
         Div bottomFence2 = createFenceSegment();
         bottomFence2.getStyle()
-            .set("grid-column", "12 / 22")
+            .set("grid-column", "12 / 21")
             .set("grid-row", "16");
         add(bottomFence2);
 
-        // Tor 5: Personen-Tor (Spalte 22)
+        // Zaun vor Säge (Spalte 22-23)
+        Div bottomFence2b = createFenceSegment();
+        bottomFence2b.getStyle()
+            .set("grid-column", "22 / 24")
+            .set("grid-row", "16");
+        add(bottomFence2b);
+
+        // Tor 5: Personen-Tor (Spalte 24 - bei Säge)
         Div personenTor = createNumberedGate(5, "Personen-Tor");
         personenTor.getStyle()
-            .set("grid-column", "22")
+            .set("grid-column", "24")
             .set("grid-row", "16");
         add(personenTor);
 
-        // Zaun zwischen Personen-Tor und Barren-Tor (Spalte 23)
+        // Zaun zwischen Personen-Tor und Barren-Tor (Spalte 25-26)
         Div zaunZwischenToren = createFenceSegment();
         zaunZwischenToren.getStyle()
-            .set("grid-column", "23")
+            .set("grid-column", "25 / 27")
             .set("grid-row", "16");
         add(zaunZwischenToren);
 
-        // Tor 6: Barren-Tor (Spalte 24-26)
+        // Tor 6: Barren-Tor (Spalte 27)
         Div barrenTor = createNumberedGate(6, "Barren-Tor");
         barrenTor.getStyle()
-            .set("grid-column", "24 / 27")
+            .set("grid-column", "27")
             .set("grid-row", "16");
         add(barrenTor);
+
+        // Rechter Zaun unten (Spalte 28)
+        Div rightFenceBottom = createFenceSegment();
+        rightFenceBottom.getStyle()
+            .set("grid-column", "28")
+            .set("grid-row", "16");
+        add(rightFenceBottom);
 
         // ============ ZAUN UNTER PLÄTZEN 17/01-11/01 (Reihe 18) ============
         // Diese Plätze sind in Reihe 17, daher Zaun in Reihe 18
@@ -994,11 +1070,69 @@ public class LagerGrid extends Div {
         targetStockyardId = stockyardId;
         if (stockyardId != null) {
             StockyardButton newButton = buttonMap.get(stockyardId);
+
+            // Wenn kein Button gefunden, prüfen ob es von einem LONG-Lagerplatz abgedeckt wird
+            if (newButton == null) {
+                newButton = findLongStockyardButtonCovering(stockyardId);
+                if (newButton != null) {
+                    log.info("Ziel {} wird von LONG-Lagerplatz {} abgedeckt",
+                        stockyardId, newButton.getStockyard().getYardNumber());
+                }
+            }
+
             if (newButton != null) {
                 newButton.setTargetHighlight(true);
                 log.info("Ziel-Lagerplatz markiert: {}", newButton.getStockyard().getYardNumber());
+            } else {
+                log.warn("Ziel-Lagerplatz nicht gefunden: ID={}", stockyardId);
             }
         }
+    }
+
+    /**
+     * Findet einen LONG-Lagerplatz-Button, der die angegebene Stockyard-ID abdeckt.
+     * Wird verwendet wenn ein Ziel-Lagerplatz nicht direkt im buttonMap gefunden wird,
+     * weil er von einem LONG-Lagerplatz "geschluckt" wurde (z.B. 12/07 -> 13/07 LONG).
+     */
+    private StockyardButton findLongStockyardButtonCovering(Long targetStockyardId) {
+        // Zuerst die Koordinaten des Ziel-Lagerplatzes aus allStockyardsMap holen
+        StockyardDTO targetYard = allStockyardsMap.get(targetStockyardId);
+        if (targetYard == null) {
+            log.debug("Target Stockyard ID={} nicht in allStockyardsMap gefunden", targetStockyardId);
+            return null;
+        }
+
+        int targetX = targetYard.getXCoordinate();
+        int targetY = targetYard.getYCoordinate();
+        log.debug("Suche LONG-Lagerplatz für Position {}/{} (ID={})", targetX, targetY, targetStockyardId);
+
+        // Durchsuche alle LONG-Lagerplätze
+        for (StockyardButton button : buttonMap.values()) {
+            StockyardDTO yard = button.getStockyard();
+
+            // Nur LONG-Lagerplätze prüfen
+            if (yard.getUsage() != StockyardUsage.LONG) {
+                continue;
+            }
+
+            // Nur gleiche Y-Koordinate
+            if (yard.getYCoordinate() != targetY) {
+                continue;
+            }
+
+            int longX = yard.getXCoordinate();
+
+            // LONG-Lagerplatz bei X deckt X und X-1 ab
+            // Wenn targetX == longX oder targetX == longX-1, dann ist es abgedeckt
+            if (targetX == longX || targetX == longX - 1) {
+                log.info("LONG {} (X={}) deckt Ziel {}/{} (ID={}) ab",
+                    yard.getYardNumber(), longX, targetX, targetY, targetStockyardId);
+                return button;
+            }
+        }
+
+        log.debug("Kein LONG-Lagerplatz gefunden, der Position {}/{} abdeckt", targetX, targetY);
+        return null;
     }
 
     /**
@@ -1035,7 +1169,7 @@ public class LagerGrid extends Div {
     // ========================================================================
 
     /**
-     * Fügt den Kran zum Grid hinzu
+     * Fügt den Kran zum Grid hinzu - mit absoluter Pixel-Positionierung
      */
     private void addCrane() {
         if (!craneVisible) return;
@@ -1044,23 +1178,22 @@ public class LagerGrid extends Div {
         int craneSize = Math.max(CELL_WIDTH, CELL_HEIGHT) + 20;
         craneOverlay = new CraneOverlay(craneSize);
 
-        // Kran an Basis-Position platzieren
-        int baseGridCol = getGridColumnForX(craneBaseGridX);
-        int baseGridRow = getGridRowForY(craneBaseGridY);
-
+        // Absolut positionieren innerhalb des Grid-Containers
         craneOverlay.getStyle()
-            .set("grid-column", String.valueOf(baseGridCol))
-            .set("grid-row", String.valueOf(baseGridRow))
+            .set("position", "absolute")
             .set("z-index", "100")
-            .set("justify-self", "center")
-            .set("align-self", "center");
+            .set("pointer-events", "none")
+            .set("transition", "left 0.5s ease-out, top 0.5s ease-out");
 
         add(craneOverlay);
 
-        // Initiale Position mit Animation setzen
-        updateCraneGridPosition();
+        // Container muss position: relative haben für absolute Kinder
+        getStyle().set("position", "relative");
 
-        log.debug("Crane added at base position, moving to ({}, {})", craneGridX, craneGridY);
+        // Initiale Position setzen
+        updateCranePixelPosition();
+
+        log.debug("Crane added with absolute positioning");
     }
 
     /**
@@ -1071,7 +1204,7 @@ public class LagerGrid extends Div {
 
         cranePositionDisplay = new CranePositionDisplay();
         cranePositionDisplay.getStyle()
-            .set("grid-column", "24 / 27")
+            .set("grid-column", "26 / 29")
             .set("grid-row", "17 / 22")
             .set("justify-self", "center")
             .set("align-self", "start")
@@ -1079,7 +1212,7 @@ public class LagerGrid extends Div {
             .set("z-index", "10");
 
         // Standard-Position setzen
-        cranePositionDisplay.setPosition(37620, 28340, 7020);
+        cranePositionDisplay.setPosition(27000, 18000, 5000);
 
         add(cranePositionDisplay);
     }
@@ -1089,45 +1222,206 @@ public class LagerGrid extends Div {
      * Einheitliche Berechnung für alle X-Werte
      */
     private int getGridColumnForX(int x) {
-        return columns - x + 4;  // X=17 → Spalte 4, X=1 → Spalte 20
+        // Begrenze auf gültigen Bereich (1-17)
+        int clampedX = Math.max(1, Math.min(17, x));
+        return columns - clampedX + 4;  // X=17 → Spalte 4, X=1 → Spalte 20
     }
 
     /**
      * Berechnet die Grid-Reihe für eine Y-Koordinate
      */
     private int getGridRowForY(int y) {
-        return rows - y + 5;
+        // Begrenze auf gültigen Bereich (1-10)
+        int clampedY = Math.max(1, Math.min(10, y));
+        return rows - clampedY + 5;
     }
 
     /**
-     * Aktualisiert die Grid-Position des Krans mit Animation
+     * Aktualisiert die Pixel-Position des Krans basierend auf mm-Koordinaten
+     *
+     * Referenzpunkte aus Oracle-Datenbank:
+     * - 17/10: X=96740, Y=35630 (links oben im UI)
+     * - 01/10: X=16740, Y=35630 (rechts im Haupt-Grid)
+     * - 17/01: X=96740, Y=6270  (links unten im UI)
+     * - SÄGE:  X=9300,  Y=36020 (ganz rechts oben im UI)
+     *
+     * Pixel-Berechnung basierend auf CSS-Grid-Layout:
+     * - Padding: 15px
+     * - Spalte 1 (Zaun): 6px, Spalte 2 (Gap): 12px, Spalte 3 (Labels): 25px
+     * - Spalten 4-20 (X=17 bis X=1): je 75px = 1275px total
+     * - Weitere Spalten für Ausgangs-Plätze und Säge
+     *
+     * - Reihe 1 (Säge): 55px, Reihe 2 (Zaun): 6px, Reihe 3 (Gap): 12px, Reihe 4 (Labels): 20px
+     * - Reihen 5-14 (Y=10 bis Y=1): je 38px = 380px total
      */
-    private void updateCraneGridPosition() {
+    private void updateCranePixelPosition() {
         if (craneOverlay == null) return;
 
-        // Ziel-Position berechnen
-        int targetCol = getGridColumnForX(craneGridX);
-        int baseCol = getGridColumnForX(craneBaseGridX);
+        // === MM-KOORDINATEN DER REFERENZPUNKTE (aus Datenbank) ===
+        final int MM_X_17 = 96740;     // X=17 (links im UI)
+        final int MM_X_01 = 16740;     // X=1 (rechts im Haupt-Grid)
+        final int MM_SAW_X = 9300;     // Säge X-Position
+        final int MM_Y_10 = 35630;     // Y=10 (oben im UI)
+        final int MM_Y_01 = 6270;      // Y=1 (unten im UI)
+        final int MM_SAW_Y = 36020;    // Säge Y-Position
 
-        int targetRow = getGridRowForY(craneGridY);
-        int baseRow = getGridRowForY(craneBaseGridY);
+        // === PIXEL-KOORDINATEN basierend auf CSS-Grid ===
+        // CSS-Grid Layout:
+        // - Padding: 15px links
+        // - Spalte 1 (Zaun): 6px, Spalte 2 (Gap): 12px, Spalte 3 (Labels): 25px
+        // - Spalten 4-20: Stockyards X=17 bis X=1, je 75px mit 3px Gap
+        // Start von Spalte 4: 15 + 6 + 3 + 12 + 3 + 25 + 3 = 67px
+        // Mitte Spalte 4 (X=17): 67 + 37 = 104px (gerundet 105)
+        // Mitte Spalte 20 (X=1): 105 + 16*78 = 1353px
+        final int PIXEL_X_17 = 105;    // Spalte 4 Mitte (X=17, mm=96740)
+        final int PIXEL_X_01 = 1353;   // Spalte 20 Mitte (X=1, mm=16740)
+        final int PIXEL_Y_10 = 140;    // Reihe 5 Mitte (Y=10, mm=35630)
+        final int PIXEL_Y_01 = 509;    // Reihe 14 Mitte (Y=1, mm=6270)
 
-        // Pixel-Offset berechnen (Spalten-Differenz * (Zellenbreite + Gap))
-        int colDiff = targetCol - baseCol;
-        int rowDiff = targetRow - baseRow;
+        // Y-Offset: Kran etwas höher positionieren (negative Werte = nach oben)
+        // Zellen sind 38px hoch, Kran ist 95px hoch -> Kran ist viel größer
+        final int PIXEL_Y_OFFSET = -12;  // 12 Pixel nach oben verschieben (negativ = höher)
 
-        int translateX = colDiff * (CELL_WIDTH + GAP);
-        int translateY = rowDiff * (CELL_HEIGHT + GAP);
+        // === SÄGE-POSITION (visuell in Reihe 1-3, Spalte 24) ===
+        // Die Säge ist visuell oberhalb des Lager-Grids platziert
+        // Empirisch kalibriert auf die visuelle Säge-Position
+        final int PIXEL_SAW_X = 1520;  // Säge X-Pixel-Position (empirisch angepasst)
+        final int PIXEL_SAW_Y = 45;    // Säge Y-Pixel-Position (Mitte von Reihe 1-3)
 
-        // Animation starten
-        craneOverlay.setTranslatePosition(translateX, translateY);
+        int pixelX, pixelY;
 
-        log.debug("Crane animation: base({},{}) -> target({},{}) = translate({},{})",
-                baseCol, baseRow, targetCol, targetRow, translateX, translateY);
+        // === SONDERFALL: SÄGE-BEREICH ===
+        // Wenn Kran im Säge-Bereich (X < 12000 und Y > 35500), direkte Säge-Position verwenden
+        if (craneMmX < 12000 && craneMmY > 35500) {
+            pixelX = PIXEL_SAW_X;
+            pixelY = PIXEL_SAW_Y;
+            log.info("Crane at SAW position: mm({},{}) -> pixel({},{})", craneMmX, craneMmY, pixelX, pixelY);
+        } else {
+            // === NORMALE LINEARE INTERPOLATION ===
+            // X: Hohe mm-Werte (96740) -> niedrige Pixel, niedrige mm-Werte (16740) -> hohe Pixel
+            double ratioX = (double)(MM_X_17 - craneMmX) / (MM_X_17 - MM_X_01);
+            pixelX = PIXEL_X_17 + (int)(ratioX * (PIXEL_X_01 - PIXEL_X_17));
+
+            // Y: Hohe mm-Werte (35630) -> niedrige Pixel, niedrige mm-Werte (6270) -> hohe Pixel
+            double ratioY = (double)(MM_Y_10 - craneMmY) / (MM_Y_10 - MM_Y_01);
+            pixelY = PIXEL_Y_10 + (int)(ratioY * (PIXEL_Y_01 - PIXEL_Y_10)) + PIXEL_Y_OFFSET;
+
+            // Erwartete Stockyard-Position berechnen (zur Diagnose)
+            // X: Hohe mm = hohe X-Koordinate (links), niedrige mm = niedrige X-Koordinate (rechts)
+            // X = 17 - (MM_X_17 - craneMmX) / 5000
+            int columnsFromX17 = (int) Math.round((double)(MM_X_17 - craneMmX) / 5000.0);
+            int expectedXCoord = 17 - columnsFromX17;
+            if (expectedXCoord < 1) expectedXCoord = 1;
+            if (expectedXCoord > 17) expectedXCoord = 17;
+
+            // Y: Hohe mm = hohe Y-Koordinate (oben), niedrige mm = niedrige Y-Koordinate (unten)
+            int rowsFromY1 = (int) Math.round((double)(craneMmY - MM_Y_01) / ((MM_Y_10 - MM_Y_01) / 9.0));
+            int expectedYCoord = 1 + rowsFromY1;
+            if (expectedYCoord < 1) expectedYCoord = 1;
+            if (expectedYCoord > 10) expectedYCoord = 10;
+
+            log.info("=== CRANE PIXEL DEBUG ===");
+            log.info("Crane mm: X={}, Y={}", craneMmX, craneMmY);
+            log.info("Ratio: X={}, Y={}", String.format("%.4f", ratioX), String.format("%.4f", ratioY));
+            log.info("Pixel center (vor Offset): X={}, Y={}", pixelX, pixelY);
+            log.info("Erwarteter Lagerplatz: {}/{} (berechnet aus mm)",
+                String.format("%02d", expectedXCoord), String.format("%02d", expectedYCoord));
+
+            // === LONG STOCKYARD KORREKTUR ===
+            // Prüfen ob die Zielposition von einem LONG-Lagerplatz abgedeckt wird
+            // LONG-Lagerplätze spannen 2 Spalten: X und X-1
+            // Wenn Ziel z.B. X=12 ist und 13/08 ein LONG ist, dann deckt 13/08 auch 12/08 ab
+            StockyardButton longStockyard = findLongStockyardCovering(expectedXCoord, expectedYCoord);
+            if (longStockyard != null) {
+                StockyardDTO longYard = longStockyard.getStockyard();
+                int longX = longYard.getXCoordinate();
+
+                // LONG-Lagerplatz deckt X und X-1 ab
+                // Mitte ist zwischen diesen beiden Spalten
+                // Pixel für X: 105 + (17 - X) * 78
+                // Pixel für X-1: 105 + (17 - (X-1)) * 78 = Pixel für X + 78
+                // Mitte: Pixel für X + 39
+                int longCenterPixelX = PIXEL_X_17 + (17 - longX) * 78 + 39;  // +39 = halbe Spalte nach rechts
+
+                log.info("LONG STOCKYARD KORREKTUR: {} deckt Position {}/{} ab",
+                    longYard.getYardNumber(),
+                    String.format("%02d", expectedXCoord), String.format("%02d", expectedYCoord));
+                log.info("Pixel angepasst: {} -> {} (Mitte von LONG)", pixelX, longCenterPixelX);
+
+                pixelX = longCenterPixelX;
+            }
+            log.info("=========================");
+        }
+
+        // Kran-Größe berücksichtigen (zentrieren)
+        // craneSize/2 wird abgezogen um die LEFT/TOP CSS-Position zu setzen,
+        // sodass der Kran ZENTRIERT über dem Zielpunkt erscheint
+        int craneSize = Math.max(CELL_WIDTH, CELL_HEIGHT) + 20;
+        int centerPixelX = pixelX;  // Für Logging
+        int centerPixelY = pixelY;
+        pixelX -= craneSize / 2;
+        pixelY -= craneSize / 2;
+
+        log.info("Crane position: center=({},{}) -> left/top=({},{}) [craneSize={}]",
+            centerPixelX, centerPixelY, pixelX, pixelY, craneSize);
+
+        // Position setzen
+        craneOverlay.getStyle()
+            .set("left", pixelX + "px")
+            .set("top", pixelY + "px");
     }
 
     /**
-     * Setzt die Kran-Position (Grid-Koordinaten)
+     * Findet einen LONG-Lagerplatz, der die angegebene Position abdeckt.
+     * LONG-Lagerplätze spannen 2 Spalten: ihre eigene X-Koordinate und X-1.
+     * Beispiel: LONG 13/08 deckt 13/08 und 12/08 ab.
+     *
+     * @param targetX X-Koordinate der Zielposition
+     * @param targetY Y-Koordinate der Zielposition
+     * @return StockyardButton des LONG-Lagerplatzes, oder null wenn keiner gefunden
+     */
+    private StockyardButton findLongStockyardCovering(int targetX, int targetY) {
+        for (StockyardButton button : buttonMap.values()) {
+            StockyardDTO yard = button.getStockyard();
+
+            // Nur LONG-Lagerplätze prüfen
+            if (yard.getUsage() != StockyardUsage.LONG) {
+                continue;
+            }
+
+            // Nur gleiche Y-Koordinate
+            if (yard.getYCoordinate() != targetY) {
+                continue;
+            }
+
+            int longX = yard.getXCoordinate();
+
+            // LONG-Lagerplatz deckt X und X-1 ab
+            // Also: longX und longX-1
+            if (targetX == longX || targetX == longX - 1) {
+                log.debug("LONG {} deckt Position {}/{} ab (longX={}, targetX={})",
+                    yard.getYardNumber(), targetX, targetY, longX, targetX);
+                return button;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Alte Grid-basierte Positionierung (für Abwärtskompatibilität)
+     */
+    private void updateCraneGridPosition() {
+        // Konvertiere Grid-Koordinaten zu mm und verwende die neue Methode
+        // Grid X=1 entspricht stockMinX, Grid X=17 entspricht stockMaxX
+        int rangeX = stockMaxX - stockMinX;
+        int rangeY = stockMaxY - stockMinY;
+        int mmX = stockMinX + (craneGridX - 1) * (rangeX / 16);  // mm pro Spalte
+        int mmY = stockMinY + (craneGridY - 1) * (rangeY / 9);   // mm pro Reihe
+        setCranePositionMm(mmX, mmY);
+    }
+
+    /**
+     * Setzt die Kran-Position (Grid-Koordinaten) - veraltet, nutze setCranePositionMm()
      * @param x X-Koordinate (1-17)
      * @param y Y-Koordinate (1-10)
      */
@@ -1139,17 +1433,34 @@ public class LagerGrid extends Div {
     }
 
     /**
-     * Setzt die Kran-Position in mm und aktualisiert die Anzeige
+     * Setzt die Kran-Position direkt in mm-Koordinaten
+     * Dies ist die bevorzugte Methode für die exakte Positionierung
+     * @param mmX X-Koordinate in mm
+     * @param mmY Y-Koordinate in mm
+     */
+    public void setCranePositionMm(int mmX, int mmY) {
+        this.craneMmX = mmX;
+        this.craneMmY = mmY;
+        updateCranePixelPosition();
+        log.debug("Crane moved to mm position ({}, {})", mmX, mmY);
+    }
+
+    /**
+     * Setzt die Kran-Position in mm und aktualisiert die Anzeige (inkl. Z für Display)
      * @param x X-Koordinate in mm
      * @param y Y-Koordinate in mm
      * @param z Z-Koordinate in mm
      */
     public void setCranePosition(int x, int y, int z) {
+        // Position im Grid aktualisieren (X, Y)
+        setCranePositionMm(x, y);
+
+        // Positions-Display aktualisieren (X, Y, Z)
         if (cranePositionDisplay != null) {
             cranePositionDisplay.setPosition(x, y, z);
         }
+        // Greifer-Höhe basierend auf Z berechnen (0-100)
         if (craneOverlay != null) {
-            // Greifer-Höhe basierend auf Z berechnen (0-100)
             int gripperHeight = Math.max(0, Math.min(100, z / 100));
             craneOverlay.setGripperHeight(gripperHeight);
         }
@@ -1359,11 +1670,18 @@ public class LagerGrid extends Div {
             String border = "none";
             if (isTargetHighlighted) {
                 // Ziel-Lagerplatz für Einlagerung - rote Umrandung mit Leucht-Effekt
+                // LONG-Lagerplätze brauchen höhere z-index damit die Umrandung nicht abgeschnitten wird
                 border = "3px solid #F44336";
-                getStyle().set("box-shadow", "0 0 10px #F44336, 0 0 20px #F44336");
+                getStyle()
+                    .set("box-shadow", "0 0 10px #F44336, 0 0 20px #F44336")
+                    .set("position", "relative")
+                    .set("z-index", "50");
             } else {
-                // Normale Border-Logik
-                getStyle().remove("box-shadow");
+                // Normale Border-Logik - z-index und position zurücksetzen
+                getStyle()
+                    .remove("box-shadow")
+                    .remove("z-index")
+                    .remove("position");
                 if (!stockyard.isToStockAllowed() && !stockyard.isFromStockAllowed()) {
                     // Komplett gesperrt
                     border = "3px solid " + colorNoSwapInOut;

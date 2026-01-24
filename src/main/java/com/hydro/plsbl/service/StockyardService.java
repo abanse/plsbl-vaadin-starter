@@ -13,7 +13,12 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.*;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
 /**
@@ -262,7 +267,87 @@ public class StockyardService {
             return 0;
         }
     }
-    
+
+    /**
+     * Zählt Barren auf mehreren Lagerplätzen DIREKT aus TD_INGOT.
+     * Dies liefert aktuelle Daten, nicht aus TD_STOCKYARDSTATUS (kann veraltet sein).
+     *
+     * @param stockyardIds Liste der Lagerplatz-IDs
+     * @return Map mit Lagerplatz-ID -> Anzahl Barren
+     */
+    private Map<Long, Integer> countIngotsOnStockyards(List<Long> stockyardIds) {
+        if (stockyardIds == null || stockyardIds.isEmpty()) {
+            return Collections.emptyMap();
+        }
+
+        try {
+            String placeholders = stockyardIds.stream()
+                .map(id -> "?")
+                .collect(Collectors.joining(","));
+
+            String sql = String.format(
+                "SELECT STOCKYARD_ID, COUNT(*) as CNT FROM TD_INGOT " +
+                "WHERE STOCKYARD_ID IN (%s) " +
+                "GROUP BY STOCKYARD_ID",
+                placeholders);
+
+            Map<Long, Integer> result = new HashMap<>();
+            jdbcTemplate.query(sql, rs -> {
+                Long yardId = rs.getLong("STOCKYARD_ID");
+                int count = rs.getInt("CNT");
+                result.put(yardId, count);
+            }, stockyardIds.toArray());
+
+            return result;
+        } catch (Exception e) {
+            log.warn("Fehler beim Zaehlen der Barren: {}", e.getMessage());
+            return Collections.emptyMap();
+        }
+    }
+
+    /**
+     * Zählt offene Transport-Aufträge ZU den angegebenen Lagerplätzen.
+     * Status: PENDING (P), IN_PROGRESS (I), PICKED_UP (U), PAUSED (H)
+     * Dies verhindert, dass volle Lagerplätze als Ziel ausgewählt werden.
+     *
+     * @param stockyardIds Liste der Lagerplatz-IDs
+     * @return Map mit Lagerplatz-ID -> Anzahl offener Transporte
+     */
+    private Map<Long, Integer> countPendingTransportsToYards(List<Long> stockyardIds) {
+        if (stockyardIds == null || stockyardIds.isEmpty()) {
+            return Collections.emptyMap();
+        }
+
+        try {
+            // SQL für Oracle und H2 kompatibel
+            String placeholders = stockyardIds.stream()
+                .map(id -> "?")
+                .collect(Collectors.joining(","));
+
+            String sql = String.format(
+                "SELECT TO_YARD_ID, COUNT(*) as CNT FROM TD_TRANSPORTORDER " +
+                "WHERE TO_YARD_ID IN (%s) AND STATUS IN ('P', 'I', 'U', 'H') " +
+                "GROUP BY TO_YARD_ID",
+                placeholders);
+
+            Map<Long, Integer> result = new HashMap<>();
+            jdbcTemplate.query(sql, rs -> {
+                Long yardId = rs.getLong("TO_YARD_ID");
+                int count = rs.getInt("CNT");
+                result.put(yardId, count);
+            }, stockyardIds.toArray());
+
+            if (!result.isEmpty()) {
+                log.debug("Offene Transporte zu Lagerplaetzen: {}", result);
+            }
+
+            return result;
+        } catch (Exception e) {
+            log.warn("Fehler beim Zaehlen offener Transporte: {}", e.getMessage());
+            return Collections.emptyMap();
+        }
+    }
+
     /**
      * Ermittelt die Grid-Dimensionen (max X und Y Koordinaten)
      */
@@ -275,9 +360,11 @@ public class StockyardService {
 
     /**
      * Findet verfügbare Lagerplätze eines bestimmten Typs
+     * Berücksichtigt auch offene Transport-Aufträge (PENDING, IN_PROGRESS, PICKED_UP, PAUSED)
+     * Zählt Barren DIREKT aus TD_INGOT (nicht aus TD_STOCKYARDSTATUS) für aktuelle Daten.
      */
     public List<StockyardDTO> findAvailableByType(String typeCode) {
-        log.debug("Loading available stockyards of type: {}", typeCode);
+        log.info("=== findAvailableByType START (Typ={}) ===", typeCode);
 
         List<Stockyard> stockyards = stockyardRepository.findByType(typeCode);
 
@@ -286,14 +373,19 @@ public class StockyardService {
             .map(Stockyard::getId)
             .collect(Collectors.toList());
 
-        // Status laden
+        // Status laden (für UI-Anzeige)
         Map<Long, StockyardStatus> statusMap = statusRepository.findByStockyardIdIn(stockyardIds)
             .stream()
             .collect(Collectors.toMap(StockyardStatus::getStockyardId, s -> s));
 
-        // DTOs erstellen und nach verfügbarem Platz filtern
-        return stockyards.stream()
-            .filter(Stockyard::isToStockAllowed)
+        // Offene Transport-Aufträge pro Ziel-Lagerplatz zählen
+        Map<Long, Integer> pendingTransportsMap = countPendingTransportsToYards(stockyardIds);
+
+        // Aktuelle Barren-Anzahl DIREKT aus TD_INGOT zählen (nicht aus Status-Tabelle)
+        Map<Long, Integer> actualIngotCounts = countIngotsOnStockyards(stockyardIds);
+
+        // DTOs erstellen und nach verfügbarem Platz filtern (inkl. offener Transporte)
+        List<StockyardDTO> result = stockyards.stream()
             .map(yard -> {
                 StockyardDTO dto = toDTO(yard);
                 StockyardStatus status = statusMap.get(yard.getId());
@@ -302,8 +394,31 @@ public class StockyardService {
                 }
                 return dto;
             })
-            .filter(dto -> !dto.isFull()) // Nur nicht-volle Plätze
+            .filter(dto -> {
+                // 1. Prüfen ob Einlagern erlaubt ist
+                if (!dto.isToStockAllowed()) {
+                    log.info("Lagerplatz {} (Typ {}): EINLAGERN NICHT ERLAUBT -> ABGELEHNT",
+                        dto.getYardNumber(), typeCode);
+                    return false;
+                }
+
+                // 2. Kapazitätsprüfung: Aktuelle Barren + offene Transporte
+                int currentCount = actualIngotCounts.getOrDefault(dto.getId(), 0);
+                int pendingTransports = pendingTransportsMap.getOrDefault(dto.getId(), 0);
+                int totalExpected = currentCount + pendingTransports;
+                int maxIngots = dto.getMaxIngots();
+
+                if (totalExpected >= maxIngots) {
+                    log.info("Lagerplatz {} (Typ {}): VOLL aktuell={}, pending={}, gesamt={}, max={}",
+                        dto.getYardNumber(), typeCode, currentCount, pendingTransports, totalExpected, maxIngots);
+                    return false;
+                }
+                return true;
+            })
             .collect(Collectors.toList());
+
+        log.info("=== findAvailableByType END: {} verfuegbare Plaetze ===", result.size());
+        return result;
     }
 
     /**
@@ -330,6 +445,74 @@ public class StockyardService {
             return Optional.ofNullable(toYardId);
         } catch (Exception e) {
             log.info("Kein offener Transport-Auftrag für Barren {} gefunden: {}", ingotId, e.getMessage());
+            return Optional.empty();
+        }
+    }
+
+    /**
+     * Findet den Ziel-Lagerplatz aus einem aktiven Transport-Auftrag (IN_PROGRESS oder PICKED_UP)
+     * der VON DER SÄGE kommt.
+     * Wird verwendet, um die Markierung zu behalten, während der Kran einen Barren transportiert.
+     *
+     * WICHTIG: Nur Transporte von der Säge (YARD_TYPE='S') werden berücksichtigt,
+     * damit alte/andere Transportaufträge nicht fälschlich markiert werden.
+     *
+     * @return Optional mit Ziel-Lagerplatz-ID oder leer wenn kein aktiver Transport läuft
+     */
+    public Optional<Long> findActiveTransportOrderTarget() {
+        try {
+            // Status-Codes: I=IN_PROGRESS, U=PICKED_UP (Kran ist aktiv unterwegs)
+            // PENDING wird NICHT berücksichtigt - Markierung erscheint erst wenn Transport startet
+            // Nach Abschluss (COMPLETED) wird die Markierung gelöscht
+            // NUR Transporte von der Säge (YARD_TYPE='S') berücksichtigen!
+            Long toYardId = jdbcTemplate.queryForObject(
+                "SELECT t.TO_YARD_ID FROM TD_TRANSPORTORDER t " +
+                "JOIN MD_STOCKYARD s ON t.FROM_YARD_ID = s.ID " +
+                "WHERE t.STATUS IN ('I', 'U') AND s.YARD_TYPE = 'S' " +
+                "ORDER BY t.ID DESC FETCH FIRST 1 ROWS ONLY",
+                Long.class);
+            log.debug("Aktiver Transport-Auftrag von Säge gefunden: Ziel-Platz ID={}", toYardId);
+            return Optional.ofNullable(toYardId);
+        } catch (Exception e) {
+            log.debug("Kein aktiver Transport-Auftrag von Säge gefunden");
+            return Optional.empty();
+        }
+    }
+
+    /**
+     * Findet den LONG-Lagerplatz, der einen bestimmten Lagerplatz abdeckt.
+     * Wird verwendet wenn ein Ziel-Lagerplatz von einem LONG "geschluckt" wurde.
+     *
+     * Beispiel: 12/07 wurde zu 13/07 (LONG) zusammengefügt.
+     * Wenn wir 12/07's ID übergeben, bekommen wir 13/07's ID zurück.
+     *
+     * @param stockyardId ID des (möglicherweise versteckten) Lagerplatzes
+     * @return Optional mit ID des LONG-Lagerplatzes, oder leer wenn kein LONG gefunden
+     */
+    public Optional<Long> findCoveringLongStockyard(Long stockyardId) {
+        try {
+            // Zuerst die Koordinaten des Ziel-Lagerplatzes holen
+            var coordResult = jdbcTemplate.queryForMap(
+                "SELECT X_COORDINATE, Y_COORDINATE FROM MD_STOCKYARD WHERE ID = ?",
+                stockyardId);
+
+            int targetX = ((Number) coordResult.get("X_COORDINATE")).intValue();
+            int targetY = ((Number) coordResult.get("Y_COORDINATE")).intValue();
+
+            log.debug("Suche LONG für Position {}/{} (ID={})", targetX, targetY, stockyardId);
+
+            // Suche nach LONG-Lagerplatz bei X+1 mit gleichem Y
+            // LONG bei X deckt X und X-1 ab, also wenn unser Target bei X ist,
+            // müsste der LONG bei X+1 sein
+            Long longId = jdbcTemplate.queryForObject(
+                "SELECT ID FROM MD_STOCKYARD WHERE X_COORDINATE = ? AND Y_COORDINATE = ? AND YARD_USAGE = 'L'",
+                Long.class, targetX + 1, targetY);
+
+            log.info("LONG gefunden: ID={} deckt Position {}/{} ab", longId, targetX, targetY);
+            return Optional.of(longId);
+
+        } catch (Exception e) {
+            log.debug("Kein LONG-Lagerplatz gefunden für ID={}: {}", stockyardId, e.getMessage());
             return Optional.empty();
         }
     }
@@ -371,34 +554,86 @@ public class StockyardService {
 
     /**
      * Findet verfügbare Ziel-Lagerplätze (Einlagern erlaubt, nicht voll)
+     * Berücksichtigt auch offene Transport-Aufträge (PENDING, IN_PROGRESS, PICKED_UP, PAUSED)
+     * Zählt Barren DIREKT aus TD_INGOT (nicht aus TD_STOCKYARDSTATUS) für aktuelle Daten.
      */
     public List<StockyardDTO> findAvailableDestinations() {
-        log.debug("Loading available destination stockyards");
+        log.info("######################################################");
+        log.info("### findAvailableDestinations V2 - MIT KAPAZITÄTSPRÜFUNG ###");
+        log.info("######################################################");
 
         List<Stockyard> stockyards = stockyardRepository.findAvailableDestinations();
+        log.info("Gefundene Lagerplaetze aus DB: {}", stockyards.size());
 
         // IDs sammeln für Status-Abfrage
         List<Long> stockyardIds = stockyards.stream()
             .map(Stockyard::getId)
             .collect(Collectors.toList());
 
-        // Status laden
+        // Status laden (für UI-Anzeige)
         Map<Long, StockyardStatus> statusMap = statusRepository.findByStockyardIdIn(stockyardIds)
             .stream()
             .collect(Collectors.toMap(StockyardStatus::getStockyardId, s -> s));
 
-        // DTOs erstellen und nach verfügbarem Platz filtern
-        return stockyards.stream()
+        // Offene Transport-Aufträge pro Ziel-Lagerplatz zählen
+        Map<Long, Integer> pendingTransportsMap = countPendingTransportsToYards(stockyardIds);
+        log.info("Pending Transports Map: {}", pendingTransportsMap);
+
+        // Aktuelle Barren-Anzahl DIREKT aus TD_INGOT zählen (nicht aus Status-Tabelle)
+        Map<Long, Integer> actualIngotCounts = countIngotsOnStockyards(stockyardIds);
+        log.info("Actual Ingot Counts (aus TD_INGOT): {}", actualIngotCounts);
+
+        // DTOs erstellen und nach verfügbarem Platz filtern (inkl. offener Transporte)
+        List<StockyardDTO> result = stockyards.stream()
             .map(yard -> {
                 StockyardDTO dto = toDTO(yard);
                 StockyardStatus status = statusMap.get(yard.getId());
+
+                // WICHTIG: Status mit ECHTEN Zahlen aus TD_INGOT aktualisieren!
+                int actualCount = actualIngotCounts.getOrDefault(yard.getId(), 0);
+
                 if (status != null) {
-                    dto.setStatus(toStatusDTO(status, yard.getMaxIngots()));
+                    StockyardStatusDTO statusDTO = toStatusDTO(status, yard.getMaxIngots());
+                    // Überschreibe mit echtem Count aus TD_INGOT
+                    statusDTO.setIngotsCount(actualCount);
+                    dto.setStatus(statusDTO);
+                } else if (actualCount > 0) {
+                    // Kein Status vorhanden aber Barren da - neuen Status erstellen
+                    StockyardStatusDTO statusDTO = new StockyardStatusDTO();
+                    statusDTO.setIngotsCount(actualCount);
+                    dto.setStatus(statusDTO);
                 }
+
                 return dto;
             })
-            .filter(dto -> !dto.isFull()) // Nur nicht-volle Plätze
+            .filter(dto -> {
+                // 1. Prüfen ob Einlagern erlaubt ist
+                if (!dto.isToStockAllowed()) {
+                    log.info("PRÜFE {}: EINLAGERN NICHT ERLAUBT -> ABGELEHNT", dto.getYardNumber());
+                    return false;
+                }
+
+                // 2. Kapazitätsprüfung: Aktuelle Barren + offene Transporte
+                int currentCount = actualIngotCounts.getOrDefault(dto.getId(), 0);
+                int pendingTransports = pendingTransportsMap.getOrDefault(dto.getId(), 0);
+                int totalExpected = currentCount + pendingTransports;
+                int maxIngots = dto.getMaxIngots();
+
+                log.info("PRÜFE {}: einlagern=JA, aktuell={}, pending={}, gesamt={}, max={} -> {}",
+                    dto.getYardNumber(), currentCount, pendingTransports, totalExpected, maxIngots,
+                    totalExpected >= maxIngots ? "VOLL" : "OK");
+
+                if (totalExpected >= maxIngots) {
+                    return false;
+                }
+                return true;
+            })
             .collect(Collectors.toList());
+
+        log.info("### ERGEBNIS: {} verfuegbare Plaetze ###", result.size());
+        log.info("### Erste 10: {} ###", result.stream().limit(10).map(StockyardDTO::getYardNumber).collect(Collectors.joining(", ")));
+        log.info("######################################################");
+        return result;
     }
     
     // === Merge/Split Methoden ===
@@ -699,10 +934,19 @@ public class StockyardService {
 
         // Barren-Nummer laden (für alle Plätze mit Barren, z.B. SAW-Plätze)
         // Erster Barren in Warteschlange = niedrigste Position (ASC) = nächster zu verarbeiten
+        // WICHTIG: Nur Barren mit ABGESCHLOSSENEN Transportaufträgen ausschließen
+        // (COMPLETED='C' wird nicht angezeigt, aktive Transporte werden weiterhin angezeigt)
         if (status.getIngotsCount() > 0) {
             try {
                 String ingotNo = jdbcTemplate.queryForObject(
-                    "SELECT INGOT_NO FROM TD_INGOT WHERE STOCKYARD_ID = ? ORDER BY PILE_POSITION ASC FETCH FIRST 1 ROWS ONLY",
+                    "SELECT INGOT_NO FROM TD_INGOT i WHERE i.STOCKYARD_ID = ? " +
+                    "AND NOT EXISTS (" +
+                    "  SELECT 1 FROM TD_TRANSPORTORDER t " +
+                    "  WHERE t.INGOT_ID = i.ID " +
+                    "  AND t.FROM_YARD_ID = i.STOCKYARD_ID " +
+                    "  AND t.STATUS = 'C'" +
+                    ") " +
+                    "ORDER BY i.PILE_POSITION ASC FETCH FIRST 1 ROWS ONLY",
                     String.class,
                     status.getStockyardId()
                 );

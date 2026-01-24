@@ -3,6 +3,7 @@ package com.hydro.plsbl.service;
 import com.hydro.plsbl.dto.IngotDTO;
 import com.hydro.plsbl.dto.TransportOrderDTO;
 import com.hydro.plsbl.entity.masterdata.Product;
+import com.hydro.plsbl.entity.enums.StockyardUsage;
 import com.hydro.plsbl.entity.masterdata.Stockyard;
 import com.hydro.plsbl.entity.transdata.StockyardStatus;
 import com.hydro.plsbl.kafka.KafkaConsumerService;
@@ -45,6 +46,8 @@ public class IngotStorageService {
     private static final String YARD_TYPE_SAW = "S";
     // Interne Lagerplaetze
     private static final String YARD_TYPE_INTERNAL = "I";
+    // Grenze fuer lange Barren in mm
+    private static final int LONG_INGOT_THRESHOLD = 6000;
 
     private final KafkaConsumerService kafkaConsumerService;
     private final KafkaProducerService kafkaProducerService;
@@ -103,8 +106,8 @@ public class IngotStorageService {
             IngotDTO ingot = createIngot(message, productId, sawPosition.getId());
             log.info("Barren erstellt: {} auf Position {}", ingot.getIngotNo(), sawPosition.getYardNumber());
 
-            // 4. Ziel-Lagerplatz finden
-            Stockyard targetYard = findTargetStockyard(productId, message.getTargetStockyardNumber())
+            // 4. Ziel-Lagerplatz finden (basierend auf Barren-Laenge)
+            Stockyard targetYard = findTargetStockyard(productId, message.getTargetStockyardNumber(), message.getLength())
                 .orElseThrow(() -> new IllegalStateException("Kein geeigneter Lagerplatz gefunden!"));
             log.debug("Ziel-Lagerplatz: {} (ID={})", targetYard.getYardNumber(), targetYard.getId());
 
@@ -180,8 +183,8 @@ public class IngotStorageService {
             log.warn("Debug-Abfrage fehlgeschlagen: {}", e.getMessage());
         }
 
-        // 4. Ziel-Lagerplatz finden
-        Stockyard targetYard = findTargetStockyard(productId, null)
+        // 4. Ziel-Lagerplatz finden (basierend auf Barren-Laenge)
+        Stockyard targetYard = findTargetStockyard(productId, null, length)
             .orElseThrow(() -> new IllegalStateException("Kein geeigneter Lagerplatz gefunden!"));
         log.info("Ziel-Lagerplatz: {} (ID={})", targetYard.getYardNumber(), targetYard.getId());
 
@@ -217,7 +220,7 @@ public class IngotStorageService {
 
         Long newId = getNextProductId();
         jdbcTemplate.update(
-            "INSERT INTO MD_PRODUCT (ID, SERIAL, PRODUCT_NO, DESCRIPTION, MAX_PER_LOCATION) VALUES (?, 1, ?, ?, 8)",
+            "INSERT INTO MD_PRODUCT (ID, SERIAL, TABLESERIAL, PRODUCT_NO, DESCRIPTION, MAX_PER_LOCATION) VALUES (?, 1, 1, ?, ?, 8)",
             newId, productNumber, "Auto-erstellt: " + productNumber);
 
         return newId;
@@ -386,57 +389,156 @@ public class IngotStorageService {
      * Findet einen geeigneten Ziel-Lagerplatz
      *
      * Prioritaet:
-     * 1. Gewuenschter Lagerplatz (falls angegeben und verfuegbar)
-     * 2. Lagerplatz mit gleichem Produkt und Platz
-     * 3. Leerer Lagerplatz
+     * 1. Gewuenschter Lagerplatz (falls angegeben, verfuegbar und passende Groesse)
+     * 2. Lagerplatz mit gleichem Produkt, Platz und EXAKT passender Groesse (SHORT/LONG)
+     * 3. Leerer Lagerplatz mit EXAKT passender Groesse (SHORT/LONG)
+     * 4. Fallback: AUTOMATIC Platz mit gleichem Produkt
+     * 5. Fallback: Leerer AUTOMATIC Platz
+     *
+     * @param productId Produkt-ID
+     * @param preferredYardNo Gewuenschte Platznummer (optional)
+     * @param ingotLength Laenge des Barrens in mm - bestimmt ob SHORT oder LONG Platz
      */
-    private Optional<Stockyard> findTargetStockyard(Long productId, String preferredYardNo) {
-        // 1. Gewuenschter Lagerplatz pruefen
+    private Optional<Stockyard> findTargetStockyard(Long productId, String preferredYardNo, int ingotLength) {
+        // Bestimme ob kurzer oder langer Barren
+        boolean isLongIngot = ingotLength > LONG_INGOT_THRESHOLD;
+        StockyardUsage requiredUsage = isLongIngot ? StockyardUsage.LONG : StockyardUsage.SHORT;
+        log.info("========================================");
+        log.info("SUCHE ZIEL-LAGERPLATZ");
+        log.info("  Barren-Laenge: {}mm (Grenze: {}mm)", ingotLength, LONG_INGOT_THRESHOLD);
+        log.info("  Kategorie: {} ({})", requiredUsage.getDisplayName(), isLongIngot ? "LANG" : "KURZ");
+        log.info("========================================");
+
+        // 1. Gewuenschter Lagerplatz pruefen (muss exakt passen oder AUTOMATIC sein)
         if (preferredYardNo != null && !preferredYardNo.isBlank()) {
             Optional<Stockyard> preferred = stockyardRepository.findByYardNumber(preferredYardNo);
-            if (preferred.isPresent() && isYardAvailable(preferred.get(), productId)) {
+            if (preferred.isPresent() && isYardAvailable(preferred.get(), productId)
+                    && hasMatchingUsageStrict(preferred.get(), requiredUsage)) {
                 log.debug("Gewuenschter Lagerplatz verfuegbar: {}", preferredYardNo);
                 return preferred;
             }
-            log.debug("Gewuenschter Lagerplatz {} nicht verfuegbar", preferredYardNo);
+            log.debug("Gewuenschter Lagerplatz {} nicht verfuegbar oder falsche Groesse", preferredYardNo);
         }
 
         // 2. Alle internen Lagerplaetze laden
         List<Stockyard> internalYards = stockyardRepository.findByType(YARD_TYPE_INTERNAL);
 
-        // 3. Lagerplaetze mit gleichem Produkt suchen
+        // Nach EXAKT passender Groesse filtern (SHORT oder LONG, NICHT AUTOMATIC)
+        List<Stockyard> exactMatchYards = internalYards.stream()
+            .filter(yard -> hasExactUsage(yard, requiredUsage))
+            .collect(Collectors.toList());
+        log.info("  Gefundene {} Lagerplaetze: {} Stueck",
+            requiredUsage.getDisplayName(), exactMatchYards.size());
+        if (!exactMatchYards.isEmpty()) {
+            log.info("  Erste 5: {}", exactMatchYards.stream()
+                .limit(5)
+                .map(y -> y.getYardNumber())
+                .collect(Collectors.joining(", ")));
+        }
+
+        // AUTOMATIC Plaetze als Fallback
+        List<Stockyard> automaticYards = internalYards.stream()
+            .filter(yard -> yard.getUsage() == null || yard.getUsage() == StockyardUsage.AUTOMATIC)
+            .collect(Collectors.toList());
+        log.info("  AUTOMATIC Fallback-Plaetze: {} Stueck", automaticYards.size());
+
+        // 3. Lagerplaetze mit gleichem Produkt suchen (EXAKT passende Groesse zuerst)
         List<StockyardStatus> productLocations = stockyardStatusRepository.findByProductId(productId);
         for (StockyardStatus status : productLocations) {
             Optional<Stockyard> yard = stockyardRepository.findById(status.getStockyardId());
-            if (yard.isPresent() && isYardAvailable(yard.get(), productId)) {
-                log.debug("Lagerplatz mit gleichem Produkt gefunden: {}", yard.get().getYardNumber());
+            if (yard.isPresent() && isYardAvailable(yard.get(), productId)
+                    && hasExactUsage(yard.get(), requiredUsage)) {
+                log.info("Lagerplatz mit gleichem Produkt und EXAKT passender Groesse gefunden: {}",
+                    yard.get().getYardNumber());
                 return yard;
             }
         }
 
-        // 4. Leeren Lagerplatz suchen
-        for (Stockyard yard : internalYards) {
+        // 4. Leeren Lagerplatz mit EXAKT passender Groesse suchen
+        for (Stockyard yard : exactMatchYards) {
             if (yard.isToStockAllowed() && isYardEmpty(yard.getId())) {
-                log.debug("Leerer Lagerplatz gefunden: {}", yard.getYardNumber());
+                log.info("========================================");
+                log.info("ERGEBNIS: Leerer {} Platz gefunden!", requiredUsage.getDisplayName());
+                log.info("  Lagerplatz: {} (ID={})", yard.getYardNumber(), yard.getId());
+                log.info("  Position: X={}, Y={}, Z={}", yard.getXPosition(), yard.getYPosition(), yard.getZPosition());
+                log.info("========================================");
                 return Optional.of(yard);
             }
         }
 
-        log.warn("Kein geeigneter Lagerplatz gefunden!");
+        // === FALLBACK: AUTOMATIC Plaetze ===
+        log.info("Kein exakt passender Platz gefunden, suche AUTOMATIC Fallback...");
+
+        // 5. AUTOMATIC Platz mit gleichem Produkt
+        for (StockyardStatus status : productLocations) {
+            Optional<Stockyard> yard = stockyardRepository.findById(status.getStockyardId());
+            if (yard.isPresent() && isYardAvailable(yard.get(), productId)
+                    && (yard.get().getUsage() == null || yard.get().getUsage() == StockyardUsage.AUTOMATIC)) {
+                log.info("AUTOMATIC Fallback mit gleichem Produkt gefunden: {}", yard.get().getYardNumber());
+                return yard;
+            }
+        }
+
+        // 6. Leerer AUTOMATIC Platz
+        for (Stockyard yard : automaticYards) {
+            if (yard.isToStockAllowed() && isYardEmpty(yard.getId())) {
+                log.info("Leerer AUTOMATIC Fallback gefunden: {}", yard.getYardNumber());
+                return Optional.of(yard);
+            }
+        }
+
+        log.warn("Kein geeigneter Lagerplatz fuer {} Barren gefunden!",
+            isLongIngot ? "langen" : "kurzen");
         return Optional.empty();
     }
 
     /**
+     * Prueft ob ein Lagerplatz EXAKT die passende Verwendung (SHORT/LONG) hat.
+     * AUTOMATIC wird hier NICHT akzeptiert.
+     */
+    private boolean hasExactUsage(Stockyard yard, StockyardUsage requiredUsage) {
+        StockyardUsage yardUsage = yard.getUsage();
+        return yardUsage == requiredUsage;
+    }
+
+    /**
+     * Prueft ob ein Lagerplatz die passende Verwendung hat (inkl. AUTOMATIC als Fallback).
+     */
+    private boolean hasMatchingUsageStrict(Stockyard yard, StockyardUsage requiredUsage) {
+        StockyardUsage yardUsage = yard.getUsage();
+        if (yardUsage == null || yardUsage == StockyardUsage.AUTOMATIC) {
+            return true; // Gewuenschter Platz darf AUTOMATIC sein
+        }
+        return yardUsage == requiredUsage;
+    }
+
+    /**
      * Prueft ob ein Lagerplatz verfuegbar ist (nicht voll und Einlagern erlaubt)
+     * Beruecksichtigt auch offene Transportauftraege, die diesen Platz als Ziel haben.
      */
     private boolean isYardAvailable(Stockyard yard, Long productId) {
         if (!yard.isToStockAllowed()) {
+            log.info("  -> {} NICHT verfuegbar: Einlagern nicht erlaubt", yard.getYardNumber());
             return false;
         }
 
-        // Aktuelle Belegung pruefen
+        // Aktuelle Belegung pruefen - direkt aus DB zaehlen
         int currentCount = ingotService.countByStockyardId(yard.getId());
-        if (currentCount >= yard.getMaxIngots()) {
+        int maxIngots = yard.getMaxIngots();
+
+        // Offene Transportauftraege zaehlen, die diesen Platz als Ziel haben
+        // Status: P=PENDING, I=IN_PROGRESS, U=PICKED_UP, H=PAUSED
+        int pendingTransports = countPendingTransportsToYard(yard.getId());
+
+        // Gesamtanzahl = aktuelle Barren + erwartete Barren aus offenen Auftraegen
+        int totalExpectedCount = currentCount + pendingTransports;
+
+        log.info("  -> {} Pruefung: aktuell={}, pending={}, gesamt={}, max={}",
+            yard.getYardNumber(), currentCount, pendingTransports, totalExpectedCount, maxIngots);
+
+        if (totalExpectedCount >= maxIngots) {
+            log.info("  -> {} NICHT verfuegbar: VOLL ({} >= {})",
+                yard.getYardNumber(), totalExpectedCount, maxIngots);
             return false;
         }
 
@@ -444,19 +546,44 @@ public class IngotStorageService {
         if (currentCount > 0) {
             Optional<StockyardStatus> status = stockyardStatusRepository.findByStockyardId(yard.getId());
             if (status.isPresent() && status.get().getProductId() != null) {
-                // Nur gleiches Produkt erlaubt
-                return status.get().getProductId().equals(productId);
+                boolean sameProduct = status.get().getProductId().equals(productId);
+                if (!sameProduct) {
+                    log.info("  -> {} NICHT verfuegbar: Anderes Produkt", yard.getYardNumber());
+                }
+                return sameProduct;
             }
         }
 
+        log.info("  -> {} VERFUEGBAR", yard.getYardNumber());
         return true;
+    }
+
+    /**
+     * Zaehlt offene Transportauftraege, die einen bestimmten Lagerplatz als Ziel haben.
+     */
+    private int countPendingTransportsToYard(Long yardId) {
+        try {
+            Integer count = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM TD_TRANSPORTORDER WHERE TO_YARD_ID = ? AND STATUS IN ('P', 'I', 'U', 'H')",
+                Integer.class, yardId);
+            int result = count != null ? count : 0;
+            if (result > 0) {
+                log.info("     Offene Transporte zu Platz ID={}: {}", yardId, result);
+            }
+            return result;
+        } catch (Exception e) {
+            log.warn("Fehler beim Zaehlen der offenen Transportauftraege fuer Platz {}: {}", yardId, e.getMessage());
+            return 0;
+        }
     }
 
     /**
      * Prueft ob ein Lagerplatz leer ist
      */
     private boolean isYardEmpty(Long stockyardId) {
-        return ingotService.countByStockyardId(stockyardId) == 0;
+        int count = ingotService.countByStockyardId(stockyardId);
+        log.info("  isYardEmpty check: StockyardID={}, count={}, isEmpty={}", stockyardId, count, count == 0);
+        return count == 0;
     }
 
     /**
@@ -476,18 +603,20 @@ public class IngotStorageService {
     }
 
     /**
-     * Generiert eine neue Transport-Auftragsnummer
+     * Generiert eine neue Transport-Auftragsnummer (max 10 Zeichen für Oracle)
+     * Format: TAYY-NNNN (z.B. TA26-0001)
      */
     private String generateTransportNo() {
-        String prefix = "TA-" + java.time.LocalDate.now().getYear() + "-";
+        int year = java.time.LocalDate.now().getYear() % 100; // 2-stelliges Jahr
+        String prefix = "TA" + String.format("%02d", year) + "-";
         try {
             Integer maxNo = jdbcTemplate.queryForObject(
-                "SELECT COALESCE(MAX(CAST(SUBSTR(TRANSPORT_NO, 9) AS INTEGER)), 0) + 1 FROM TD_TRANSPORTORDER WHERE TRANSPORT_NO LIKE ?",
+                "SELECT NVL(MAX(TO_NUMBER(SUBSTR(TRANSPORT_NO, 6))), 0) + 1 FROM TD_TRANSPORTORDER WHERE TRANSPORT_NO LIKE ?",
                 Integer.class, prefix + "%");
             return prefix + String.format("%04d", maxNo != null ? maxNo : 1);
         } catch (Exception e) {
             log.warn("Could not generate transport number, using timestamp", e);
-            return prefix + System.currentTimeMillis();
+            return prefix + String.format("%04d", (System.currentTimeMillis() % 10000));
         }
     }
 
