@@ -1,0 +1,396 @@
+-- ===================================================================
+-- Oracle Schema für PLSBL (PLS Barrenlager)
+-- Stand: 25.01.2026
+-- ===================================================================
+--
+-- Dieses Script erstellt alle Tabellen für das PLSBL-System.
+-- Ausführungsreihenfolge beachten wegen Foreign Keys!
+--
+-- Tabellen-Übersicht:
+--   Stammdaten (MD_*):
+--     1. MD_APPSETTING     - Anwendungseinstellungen
+--     2. MD_STOCKYARD      - Lagerplätze
+--     3. MD_PRODUCT        - Produkte/Artikel
+--     4. MD_INGOTTYPE      - Barrentypen
+--
+--   Bewegungsdaten (TD_*):
+--     5. TD_STOCKYARDSTATUS - Lagerplatz-Status
+--     6. TD_INGOT           - Barren
+--     7. TD_CRANESTATUS     - Kran-Status
+--     8. TD_PLSSTATUS       - Säge-Status
+--     9. TD_TRANSPORTORDER  - Transportaufträge
+--    10. TD_CALLOFF         - Abrufe/Kundenbestellungen
+--
+-- ===================================================================
+
+
+-- ===================================================================
+-- STAMMDATEN (MD_*)
+-- ===================================================================
+
+-- -------------------------------------------------------------------
+-- 1. MD_APPSETTING - Anwendungseinstellungen
+-- -------------------------------------------------------------------
+CREATE TABLE MD_APPSETTING (
+    SETTING_KEY     VARCHAR2(50) PRIMARY KEY,
+    SETTING_VALUE   VARCHAR2(500),
+    CATEGORY        VARCHAR2(50),
+    DESCRIPTION     VARCHAR2(256)
+);
+
+COMMENT ON TABLE MD_APPSETTING IS 'Anwendungseinstellungen (SPS, Kafka, Farben, etc.)';
+COMMENT ON COLUMN MD_APPSETTING.SETTING_KEY IS 'Eindeutiger Schlüssel der Einstellung';
+COMMENT ON COLUMN MD_APPSETTING.SETTING_VALUE IS 'Wert der Einstellung';
+COMMENT ON COLUMN MD_APPSETTING.CATEGORY IS 'Kategorie (SPS, KAFKA, COLOR, etc.)';
+
+
+-- -------------------------------------------------------------------
+-- 2. MD_STOCKYARD - Lagerplätze
+-- -------------------------------------------------------------------
+CREATE TABLE MD_STOCKYARD (
+    ID              NUMBER(19) NOT NULL,
+    SERIAL          NUMBER(19) DEFAULT 1 NOT NULL,
+    YARD_NO         VARCHAR2(7) NOT NULL,
+    X_COORDINATE    NUMBER(10) NOT NULL,
+    Y_COORDINATE    NUMBER(10) NOT NULL,
+    DESCRIPTION     VARCHAR2(256),
+    YARD_TYPE       CHAR(1) NOT NULL,
+    YARD_USAGE      CHAR(1) NOT NULL,
+    BOTTOM_CENTER_X NUMBER(10) NOT NULL,
+    BOTTOM_CENTER_Y NUMBER(10) NOT NULL,
+    BOTTOM_CENTER_Z NUMBER(10) DEFAULT 0,
+    LENGTH          NUMBER(10) NOT NULL,
+    WIDTH           NUMBER(10) NOT NULL,
+    HEIGHT          NUMBER(10) DEFAULT 0,
+    MAX_INGOTS      NUMBER(10) NOT NULL,
+    TO_STOCK_ALLOWED   NUMBER(1) DEFAULT 1,
+    FROM_STOCK_ALLOWED NUMBER(1) DEFAULT 1,
+    MOVEMENT_COEFF  NUMBER(10) DEFAULT 1,
+    CONSTRAINT PK_STOCKYARD PRIMARY KEY (ID),
+    CONSTRAINT UK_STOCKYARD_YARDNO UNIQUE (YARD_NO)
+);
+
+COMMENT ON TABLE MD_STOCKYARD IS 'Lagerplätze mit Koordinaten und Eigenschaften';
+COMMENT ON COLUMN MD_STOCKYARD.YARD_NO IS 'Lagerplatznummer (z.B. 17/10, 00/01)';
+COMMENT ON COLUMN MD_STOCKYARD.X_COORDINATE IS 'X-Koordinate im Grid (1-17)';
+COMMENT ON COLUMN MD_STOCKYARD.Y_COORDINATE IS 'Y-Koordinate im Grid (1-10)';
+COMMENT ON COLUMN MD_STOCKYARD.YARD_TYPE IS 'Typ: I=Internal, E=External, S=Saw, O=SwapOut, L=Loading';
+COMMENT ON COLUMN MD_STOCKYARD.YARD_USAGE IS 'Verwendung: S=Short, L=Long, A=Automatic';
+COMMENT ON COLUMN MD_STOCKYARD.BOTTOM_CENTER_X IS 'Kran X-Position in mm';
+COMMENT ON COLUMN MD_STOCKYARD.BOTTOM_CENTER_Y IS 'Kran Y-Position in mm';
+COMMENT ON COLUMN MD_STOCKYARD.BOTTOM_CENTER_Z IS 'Kran Z-Position in mm';
+COMMENT ON COLUMN MD_STOCKYARD.MAX_INGOTS IS 'Maximale Anzahl Barren';
+COMMENT ON COLUMN MD_STOCKYARD.TO_STOCK_ALLOWED IS 'Einlagern erlaubt (1=Ja, 0=Nein)';
+COMMENT ON COLUMN MD_STOCKYARD.FROM_STOCK_ALLOWED IS 'Auslagern erlaubt (1=Ja, 0=Nein)';
+
+CREATE INDEX IDX_STOCKYARD_COORDS ON MD_STOCKYARD(X_COORDINATE, Y_COORDINATE);
+CREATE INDEX IDX_STOCKYARD_TYPE ON MD_STOCKYARD(YARD_TYPE);
+
+
+-- -------------------------------------------------------------------
+-- 3. MD_PRODUCT - Produkte/Artikel
+-- -------------------------------------------------------------------
+CREATE TABLE MD_PRODUCT (
+    ID              NUMBER(19) NOT NULL,
+    SERIAL          NUMBER(19) DEFAULT 1 NOT NULL,
+    PRODUCT_NO      VARCHAR2(20) NOT NULL,
+    DESCRIPTION     VARCHAR2(256),
+    MAX_PER_LOCATION NUMBER(10) DEFAULT 8,
+    CONSTRAINT PK_PRODUCT PRIMARY KEY (ID),
+    CONSTRAINT UK_PRODUCT_PRODUCTNO UNIQUE (PRODUCT_NO)
+);
+
+COMMENT ON TABLE MD_PRODUCT IS 'Produkte/Artikel';
+COMMENT ON COLUMN MD_PRODUCT.PRODUCT_NO IS 'Produktnummer (eindeutig)';
+COMMENT ON COLUMN MD_PRODUCT.MAX_PER_LOCATION IS 'Max. Barren pro Lagerplatz für dieses Produkt';
+
+
+-- -------------------------------------------------------------------
+-- 4. MD_INGOTTYPE - Barrentypen
+-- -------------------------------------------------------------------
+CREATE TABLE MD_INGOTTYPE (
+    ID              NUMBER(19) NOT NULL,
+    SERIAL          NUMBER(19) DEFAULT 1 NOT NULL,
+    NAME            VARCHAR2(20) NOT NULL,
+    DESCRIPTION     VARCHAR2(100),
+    LENGTH_TYPE     CHAR(1),
+    INTERNAL_ALLOWED  NUMBER(1) DEFAULT 1,
+    EXTERNAL_ALLOWED  NUMBER(1) DEFAULT 1,
+    RETRIEVAL_ALLOWED NUMBER(1) DEFAULT 1,
+    AUTO_RETRIEVAL    NUMBER(1) DEFAULT 0,
+    MIN_LENGTH      NUMBER(10),
+    MAX_LENGTH      NUMBER(10),
+    MIN_WIDTH       NUMBER(10),
+    MAX_WIDTH       NUMBER(10),
+    MIN_THICKNESS   NUMBER(10),
+    MAX_THICKNESS   NUMBER(10),
+    MIN_WEIGHT      NUMBER(10),
+    MAX_WEIGHT      NUMBER(10),
+    PRODUCT_REGEX   VARCHAR2(200),
+    PRIORITY        NUMBER(5) DEFAULT 0,
+    CONSTRAINT PK_INGOTTYPE PRIMARY KEY (ID),
+    CONSTRAINT UK_INGOTTYPE_NAME UNIQUE (NAME)
+);
+
+COMMENT ON TABLE MD_INGOTTYPE IS 'Barrentypen (KURZ, MITTEL, LANG)';
+COMMENT ON COLUMN MD_INGOTTYPE.LENGTH_TYPE IS 'Längentyp: S=Short, M=Medium, L=Long';
+COMMENT ON COLUMN MD_INGOTTYPE.INTERNAL_ALLOWED IS 'Interne Lagerung erlaubt (1=Ja)';
+COMMENT ON COLUMN MD_INGOTTYPE.EXTERNAL_ALLOWED IS 'Externe Lagerung erlaubt (1=Ja)';
+COMMENT ON COLUMN MD_INGOTTYPE.RETRIEVAL_ALLOWED IS 'Auslagerung erlaubt (1=Ja)';
+COMMENT ON COLUMN MD_INGOTTYPE.AUTO_RETRIEVAL IS 'Automatische Auslagerung (1=Ja)';
+COMMENT ON COLUMN MD_INGOTTYPE.PRODUCT_REGEX IS 'Regex für Produktnummer-Matching';
+
+
+-- ===================================================================
+-- BEWEGUNGSDATEN (TD_*)
+-- ===================================================================
+
+-- -------------------------------------------------------------------
+-- 5. TD_STOCKYARDSTATUS - Lagerplatz-Status
+-- -------------------------------------------------------------------
+CREATE TABLE TD_STOCKYARDSTATUS (
+    ID              NUMBER(19) NOT NULL,
+    SERIAL          NUMBER(19) DEFAULT 1 NOT NULL,
+    STOCKYARD_ID    NUMBER(19) NOT NULL,
+    PRODUCT_ID      NUMBER(19),
+    INGOTS_COUNT    NUMBER(10) DEFAULT 0,
+    NEIGHBOR_ID     NUMBER(19),
+    YARD_USAGE      CHAR(1),
+    PILE_HEIGHT     NUMBER(10) DEFAULT 0,
+    CONSTRAINT PK_STOCKYARDSTATUS PRIMARY KEY (ID),
+    CONSTRAINT FK_STATUS_STOCKYARD FOREIGN KEY (STOCKYARD_ID) REFERENCES MD_STOCKYARD(ID)
+);
+
+COMMENT ON TABLE TD_STOCKYARDSTATUS IS 'Aktueller Status je Lagerplatz';
+COMMENT ON COLUMN TD_STOCKYARDSTATUS.INGOTS_COUNT IS 'Anzahl Barren auf diesem Platz';
+COMMENT ON COLUMN TD_STOCKYARDSTATUS.YARD_USAGE IS 'Überschreibt MD_STOCKYARD.YARD_USAGE';
+COMMENT ON COLUMN TD_STOCKYARDSTATUS.PILE_HEIGHT IS 'Aktuelle Stapelhöhe in mm';
+
+CREATE INDEX IDX_STATUS_STOCKYARD ON TD_STOCKYARDSTATUS(STOCKYARD_ID);
+
+
+-- -------------------------------------------------------------------
+-- 6. TD_INGOT - Barren
+-- -------------------------------------------------------------------
+CREATE TABLE TD_INGOT (
+    ID              NUMBER(19) NOT NULL,
+    SERIAL          NUMBER(19) DEFAULT 1 NOT NULL,
+    INGOT_NO        VARCHAR2(20) NOT NULL,
+    PRODUCT_ID      NUMBER(19),
+    PRODUCT_SUFFIX  VARCHAR2(10),
+    STOCKYARD_ID    NUMBER(19),
+    PILE_POSITION   NUMBER(10),
+    WEIGHT          NUMBER(10),
+    LENGTH          NUMBER(10),
+    WIDTH           NUMBER(10),
+    THICKNESS       NUMBER(10),
+    HEAD_SAWN       NUMBER(1) DEFAULT 0,
+    FOOT_SAWN       NUMBER(1) DEFAULT 0,
+    SCRAP           NUMBER(1) DEFAULT 0,
+    REVISED         NUMBER(1) DEFAULT 0,
+    ROTATED         NUMBER(1) DEFAULT 0,
+    IN_STOCK_SINCE  TIMESTAMP,
+    RELEASED_SINCE  TIMESTAMP,
+    X_POSITION      NUMBER(10),
+    Y_POSITION      NUMBER(10),
+    Z_POSITION      NUMBER(10),
+    CONSTRAINT PK_INGOT PRIMARY KEY (ID),
+    CONSTRAINT UK_INGOT_INGOTNO UNIQUE (INGOT_NO),
+    CONSTRAINT FK_INGOT_PRODUCT FOREIGN KEY (PRODUCT_ID) REFERENCES MD_PRODUCT(ID),
+    CONSTRAINT FK_INGOT_STOCKYARD FOREIGN KEY (STOCKYARD_ID) REFERENCES MD_STOCKYARD(ID)
+);
+
+COMMENT ON TABLE TD_INGOT IS 'Barren im Lager';
+COMMENT ON COLUMN TD_INGOT.INGOT_NO IS 'Barrennummer (eindeutig)';
+COMMENT ON COLUMN TD_INGOT.PILE_POSITION IS 'Position im Stapel (1 = unten)';
+COMMENT ON COLUMN TD_INGOT.WEIGHT IS 'Gewicht in kg';
+COMMENT ON COLUMN TD_INGOT.LENGTH IS 'Länge in mm';
+COMMENT ON COLUMN TD_INGOT.WIDTH IS 'Breite in mm';
+COMMENT ON COLUMN TD_INGOT.THICKNESS IS 'Dicke in mm';
+COMMENT ON COLUMN TD_INGOT.SCRAP IS 'Schrott (1=Ja)';
+COMMENT ON COLUMN TD_INGOT.REVISED IS 'Überarbeitet (1=Ja)';
+
+CREATE INDEX IDX_INGOT_STOCKYARD ON TD_INGOT(STOCKYARD_ID);
+CREATE INDEX IDX_INGOT_PRODUCT ON TD_INGOT(PRODUCT_ID);
+
+
+-- -------------------------------------------------------------------
+-- 7. TD_CRANESTATUS - Kran-Status (nur 1 Eintrag)
+-- -------------------------------------------------------------------
+CREATE TABLE TD_CRANESTATUS (
+    ID              NUMBER(19) NOT NULL,
+    SERIAL          NUMBER(19) DEFAULT 1 NOT NULL,
+    X_POSITION      NUMBER(10) DEFAULT 0,
+    Y_POSITION      NUMBER(10) DEFAULT 0,
+    Z_POSITION      NUMBER(10) DEFAULT 0,
+    CRANE_MODE      VARCHAR2(20) DEFAULT 'AUTOMATIC',
+    GRIPPER_STATE   VARCHAR2(20) DEFAULT 'OPEN',
+    JOB_STATE       VARCHAR2(20) DEFAULT 'IDLE',
+    DAEMON_STATE    VARCHAR2(20) DEFAULT 'IDLE_OK',
+    WORK_PHASE      VARCHAR2(30) DEFAULT 'IDLE',
+    FROM_STOCKYARD_ID NUMBER(19),
+    TO_STOCKYARD_ID NUMBER(19),
+    INCIDENT        VARCHAR2(20) DEFAULT 'OK',
+    INCIDENT_TEXT   VARCHAR2(256),
+    DOORS_OPEN      NUMBER(1) DEFAULT 0,
+    GATES_OPEN      NUMBER(1) DEFAULT 0,
+    CONSTRAINT PK_CRANESTATUS PRIMARY KEY (ID)
+);
+
+COMMENT ON TABLE TD_CRANESTATUS IS 'Kran-Position und Status (nur 1 Eintrag)';
+COMMENT ON COLUMN TD_CRANESTATUS.X_POSITION IS 'Aktuelle X-Position in mm';
+COMMENT ON COLUMN TD_CRANESTATUS.Y_POSITION IS 'Aktuelle Y-Position in mm';
+COMMENT ON COLUMN TD_CRANESTATUS.Z_POSITION IS 'Aktuelle Z-Position in mm';
+COMMENT ON COLUMN TD_CRANESTATUS.CRANE_MODE IS 'Modus: AUTOMATIC, MANUAL';
+COMMENT ON COLUMN TD_CRANESTATUS.GRIPPER_STATE IS 'Greifer: OPEN, CLOSED';
+COMMENT ON COLUMN TD_CRANESTATUS.JOB_STATE IS 'Job-Status: IDLE, BUSY, ERROR';
+COMMENT ON COLUMN TD_CRANESTATUS.WORK_PHASE IS 'Arbeitsphase: IDLE, MOVE_TO_PICKUP, GRABBING, etc.';
+
+
+-- -------------------------------------------------------------------
+-- 8. TD_PLSSTATUS - Säge-Status (nur 1 Eintrag)
+-- -------------------------------------------------------------------
+CREATE TABLE TD_PLSSTATUS (
+    ID                  NUMBER(19) NOT NULL,
+    SERIAL              NUMBER(19) DEFAULT 1 NOT NULL,
+    PICKUP_MODE         VARCHAR2(20) DEFAULT 'NO_PICKUP',
+    PICKUP_NUMBER       VARCHAR2(20),
+    PICKUP_ORDER_ID     NUMBER(19),
+    PICKUP_IN_PROGRESS  NUMBER(1) DEFAULT 0,
+    ROTATE              NUMBER(1) DEFAULT 0,
+    RECEIVED_TIME       TIMESTAMP,
+    POSITION_X          NUMBER(10),
+    POSITION_Y          NUMBER(10),
+    POSITION_Z          NUMBER(10),
+    COMPUTED_X          NUMBER(10),
+    COMPUTED_Y          NUMBER(10),
+    COMPUTED_Z          NUMBER(10),
+    ERROR_TYPE          VARCHAR2(50),
+    ERROR_MESSAGE       VARCHAR2(500),
+    RETURN_CONFIRMED    NUMBER(1) DEFAULT 0,
+    RECYCLE_CONFIRMED   NUMBER(1) DEFAULT 0,
+    SAWN_CONFIRMED      NUMBER(1) DEFAULT 0,
+    CONSTRAINT PK_PLSSTATUS PRIMARY KEY (ID)
+);
+
+COMMENT ON TABLE TD_PLSSTATUS IS 'Säge/Einlagerungs-Status (nur 1 Eintrag)';
+COMMENT ON COLUMN TD_PLSSTATUS.PICKUP_MODE IS 'Modus: NO_PICKUP, AUTOMATIC, MANUAL';
+COMMENT ON COLUMN TD_PLSSTATUS.PICKUP_NUMBER IS 'Nummer des aktuellen Einlagerungsvorgangs';
+COMMENT ON COLUMN TD_PLSSTATUS.ERROR_TYPE IS 'Fehlertyp (z.B. DUPLIKAT)';
+COMMENT ON COLUMN TD_PLSSTATUS.ERROR_MESSAGE IS 'Fehlermeldung';
+
+
+-- -------------------------------------------------------------------
+-- 9. TD_TRANSPORTORDER - Transportaufträge
+-- -------------------------------------------------------------------
+CREATE TABLE TD_TRANSPORTORDER (
+    ID                  NUMBER(19) NOT NULL,
+    SERIAL              NUMBER(19) DEFAULT 1 NOT NULL,
+    TABLESERIAL         NUMBER(19) DEFAULT 1 NOT NULL,
+    TRANSPORT_NO        VARCHAR2(20) NOT NULL,
+    NORMTEXT            VARCHAR2(256),
+    CALLOFF_ID          NUMBER(19),
+    INGOT_ID            NUMBER(19),
+    FROM_YARD_ID        NUMBER(19),
+    FROM_PILE_POSITION  NUMBER(10),
+    TO_YARD_ID          NUMBER(19),
+    TO_PILE_POSITION    NUMBER(10),
+    PRINTED             TIMESTAMP DEFAULT TIMESTAMP '1970-01-01 00:00:00' NOT NULL,
+    DELIVERED           TIMESTAMP DEFAULT TIMESTAMP '1970-01-01 00:00:00' NOT NULL,
+    STATUS              CHAR(1) DEFAULT 'P',
+    PRIORITY            NUMBER(10) DEFAULT 0,
+    STARTED_AT          TIMESTAMP,
+    COMPLETED_AT        TIMESTAMP,
+    ERROR_MESSAGE       VARCHAR2(2000),
+    RETRY_COUNT         NUMBER(10) DEFAULT 0,
+    CONSTRAINT PK_TRANSPORTORDER PRIMARY KEY (ID),
+    CONSTRAINT UK_TRANSPORTORDER_NO UNIQUE (TRANSPORT_NO),
+    CONSTRAINT FK_TORDER_INGOT FOREIGN KEY (INGOT_ID) REFERENCES TD_INGOT(ID),
+    CONSTRAINT FK_TORDER_FROMYARD FOREIGN KEY (FROM_YARD_ID) REFERENCES MD_STOCKYARD(ID),
+    CONSTRAINT FK_TORDER_TOYARD FOREIGN KEY (TO_YARD_ID) REFERENCES MD_STOCKYARD(ID)
+);
+
+COMMENT ON TABLE TD_TRANSPORTORDER IS 'Transportaufträge für Kran';
+COMMENT ON COLUMN TD_TRANSPORTORDER.TRANSPORT_NO IS 'Transportnummer (z.B. TA26-0001)';
+COMMENT ON COLUMN TD_TRANSPORTORDER.STATUS IS 'Status: P=Pending, I=InProgress, U=PickedUp, C=Completed, F=Failed, X=Cancelled, H=Paused';
+COMMENT ON COLUMN TD_TRANSPORTORDER.PRIORITY IS 'Priorität (höher = wichtiger)';
+
+CREATE INDEX IDX_TRANSPORTORDER_STATUS ON TD_TRANSPORTORDER(STATUS);
+CREATE INDEX IDX_TRANSPORTORDER_INGOT ON TD_TRANSPORTORDER(INGOT_ID);
+
+
+-- -------------------------------------------------------------------
+-- 10. TD_CALLOFF - Abrufe/Kundenbestellungen
+-- -------------------------------------------------------------------
+CREATE TABLE TD_CALLOFF (
+    ID                  NUMBER(19) NOT NULL,
+    SERIAL              NUMBER(19) DEFAULT 1 NOT NULL,
+    TABLESERIAL         NUMBER(19) DEFAULT 1 NOT NULL,
+    CALLOFF_NUMBER      VARCHAR2(50),
+    ORDER_NUMBER        VARCHAR2(50),
+    ORDER_POSITION      VARCHAR2(20),
+    CUSTOMER_NUMBER     VARCHAR2(20),
+    CUSTOMER_NAME       VARCHAR2(100),
+    CUSTOMER_ADDRESS    VARCHAR2(256),
+    DESTINATION         VARCHAR2(100),
+    SAP_PRODUCT_NUMBER  VARCHAR2(50),
+    PRODUCT_ID          NUMBER(19),
+    AMOUNT_REQUESTED    NUMBER(10),
+    AMOUNT_DELIVERED    NUMBER(10),
+    DELIVERY_DATE       DATE,
+    APPROVED            NUMBER(1) DEFAULT 0,
+    COMPLETED           NUMBER(1) DEFAULT 0,
+    RECEIVED            TIMESTAMP,
+    NOTES               VARCHAR2(500),
+    CONSTRAINT PK_CALLOFF PRIMARY KEY (ID)
+);
+
+COMMENT ON TABLE TD_CALLOFF IS 'Abrufe/Kundenbestellungen von SAP';
+COMMENT ON COLUMN TD_CALLOFF.CALLOFF_NUMBER IS 'Abrufnummer';
+COMMENT ON COLUMN TD_CALLOFF.ORDER_NUMBER IS 'SAP-Auftragsnummer';
+COMMENT ON COLUMN TD_CALLOFF.AMOUNT_REQUESTED IS 'Angeforderte Menge';
+COMMENT ON COLUMN TD_CALLOFF.AMOUNT_DELIVERED IS 'Bereits gelieferte Menge';
+COMMENT ON COLUMN TD_CALLOFF.APPROVED IS 'Freigegeben (1=Ja)';
+COMMENT ON COLUMN TD_CALLOFF.COMPLETED IS 'Abgeschlossen (1=Ja)';
+
+CREATE INDEX IDX_CALLOFF_APPROVED ON TD_CALLOFF(APPROVED);
+CREATE INDEX IDX_CALLOFF_COMPLETED ON TD_CALLOFF(COMPLETED);
+
+
+-- ===================================================================
+-- INITIALE DATEN
+-- ===================================================================
+
+-- Standard-Barrentypen
+INSERT INTO MD_INGOTTYPE (ID, SERIAL, NAME, DESCRIPTION, LENGTH_TYPE, INTERNAL_ALLOWED, EXTERNAL_ALLOWED, RETRIEVAL_ALLOWED, AUTO_RETRIEVAL, MIN_LENGTH, MAX_LENGTH, PRIORITY)
+VALUES (1, 1, 'KURZ', 'normale kurze Barren', 'S', 1, 1, 1, 0, 3500, 4300, 0);
+
+INSERT INTO MD_INGOTTYPE (ID, SERIAL, NAME, DESCRIPTION, LENGTH_TYPE, INTERNAL_ALLOWED, EXTERNAL_ALLOWED, RETRIEVAL_ALLOWED, AUTO_RETRIEVAL, MIN_LENGTH, MAX_LENGTH, PRIORITY)
+VALUES (2, 1, 'LANG', 'normale lange Barren', 'L', 1, 1, 0, 0, 7500, 8700, 0);
+
+INSERT INTO MD_INGOTTYPE (ID, SERIAL, NAME, DESCRIPTION, LENGTH_TYPE, INTERNAL_ALLOWED, EXTERNAL_ALLOWED, RETRIEVAL_ALLOWED, AUTO_RETRIEVAL, MIN_LENGTH, MAX_LENGTH, MAX_WEIGHT, PRIORITY)
+VALUES (3, 1, 'MITTEL', 'mittellange Barren', 'M', 0, 1, 1, 1, 4300, 7400, 18000, 0);
+
+-- Kran-Status (1 Eintrag)
+INSERT INTO TD_CRANESTATUS (ID, SERIAL, X_POSITION, Y_POSITION, Z_POSITION)
+VALUES (1, 1, 50000, 20000, 0);
+
+-- Säge-Status (1 Eintrag)
+INSERT INTO TD_PLSSTATUS (ID, SERIAL, PICKUP_MODE)
+VALUES (1, 1, 'NO_PICKUP');
+
+-- Standard-Einstellungen
+INSERT INTO MD_APPSETTING (SETTING_KEY, SETTING_VALUE, CATEGORY, DESCRIPTION)
+VALUES ('SPS_ENABLED', 'false', 'SPS', 'SPS-Kommunikation aktiviert');
+
+INSERT INTO MD_APPSETTING (SETTING_KEY, SETTING_VALUE, CATEGORY, DESCRIPTION)
+VALUES ('SPS_URL', 's7://10.72.242.190:102?remote-slot=1', 'SPS', 'SPS-Verbindungs-URL');
+
+INSERT INTO MD_APPSETTING (SETTING_KEY, SETTING_VALUE, CATEGORY, DESCRIPTION)
+VALUES ('LONG_INGOT_THRESHOLD', '6000', 'INGOT', 'Schwellwert für lange Barren in mm');
+
+COMMIT;
+
+-- ===================================================================
+-- Ende des Scripts
+-- ===================================================================

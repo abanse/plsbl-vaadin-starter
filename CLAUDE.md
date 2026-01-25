@@ -86,13 +86,28 @@ Uses Spring Data JDBC (not JPA/Hibernate) for closer SQL control.
 
 **Profiles:**
 - `h2` (default): In-memory with `schema-h2.sql` + `data-h2.sql`
-- `oracle`: Production Oracle database
+- `oracle`: Production Oracle database with `schema-oracle.sql`
 
-**Tables:**
-- `MD_STOCKYARD`: Storage locations with grid coords (X_COORDINATE, Y_COORDINATE) and crane coords in mm (BOTTOM_CENTER_X/Y/Z)
-- `TD_INGOT`: Ingot inventory with dimensions and current stockyard
+**Schema Files:**
+- `src/main/resources/schema-h2.sql` - H2 DDL (development)
+- `src/main/resources/schema-oracle.sql` - Oracle DDL (production)
+- `src/main/resources/data-h2.sql` - Test data for H2
+
+**Tables (10 total):**
+
+Stammdaten (MD_*):
+- `MD_APPSETTING`: Key-value settings (SPS_ENABLED, SPS_URL, KAFKA_*, colors)
+- `MD_STOCKYARD`: Storage locations with grid coords (X/Y_COORDINATE) and crane coords in mm (BOTTOM_CENTER_X/Y/Z)
+- `MD_PRODUCT`: Products/articles with product number
+- `MD_INGOTTYPE`: Ingot types (KURZ, MITTEL, LANG) with length ranges and permissions
+
+Bewegungsdaten (TD_*):
+- `TD_STOCKYARDSTATUS`: Current status per stockyard (ingot count, product)
+- `TD_INGOT`: Ingot inventory with dimensions, weight, and current stockyard
+- `TD_CRANESTATUS`: Crane position and status (single row)
+- `TD_PLSSTATUS`: Saw/pickup status (single row)
 - `TD_TRANSPORTORDER`: Movement orders with status lifecycle (P→I→U→C or F)
-- `MD_APPSETTING`: Key-value settings (SPS_ENABLED, SPS_URL, KAFKA_* etc.)
+- `TD_CALLOFF`: Customer orders from SAP with requested/delivered amounts
 
 ### Crane Access Control
 
