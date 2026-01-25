@@ -91,7 +91,7 @@ ABGESCHLOSSENE ARBEITEN:
    b) GET /api/test/stockyard/{id}
       - Details zu einem Lagerplatz
 
-5. [NEU 25.01.2026] Duplikat-Prüfung bei Einlagerung
+5. [NEU 25.01.2026] Duplikat-Prüfung bei Einlagerung mit globaler Fehler-Notification
 
    a) IngotStorageService.checkIngotNotInStock()
       - Prüft vor Einlagerung ob Barren bereits im Lager existiert
@@ -100,11 +100,32 @@ ABGESCHLOSSENE ARBEITEN:
       - Fehlermeldung enthält Lagerplatz-Nummer für einfache Identifikation
       Datei: src/main/java/com/hydro/plsbl/service/IngotStorageService.java
 
-   b) SawStatusService.setError() / clearError()
-      - Fehlermeldungen werden im Säge-Status gespeichert
-      - UI zeigt Fehler im Bereich "Fehler / Hinweis" an
-      - Fehler wird automatisch gelöscht bei erfolgreicher Einlagerung
-      Datei: src/main/java/com/hydro/plsbl/service/SawStatusService.java
+   b) ErrorBroadcaster Service (NEU)
+      - Zentraler Service für Fehler-Broadcasting an alle UI-Listener
+      - Verwendet Executor für asynchrone Benachrichtigung
+      - Registrierung über register() mit Consumer<ErrorMessage>
+      Datei: src/main/java/com/hydro/plsbl/service/ErrorBroadcaster.java
+
+   c) MainLayout - Globale Fehler-Notifications
+      - Registriert sich beim ErrorBroadcaster
+      - Zeigt Fehler als rote Notification in der Mitte des Bildschirms
+      - Funktioniert in allen Views (nicht nur SawView)
+      - Auto-Close nach 10 Sekunden + manueller X-Button
+      Datei: src/main/java/com/hydro/plsbl/ui/MainLayout.java
+
+6. [NEU 25.01.2026] LagerGrid Zaun-Verbesserungen
+
+   a) Tor 3 (T3) hinzugefügt
+      - Rechts neben der Säge im oberen Zaun
+      - 20px breit (wie T7)
+      - Position: Spalte 27, Reihe 2
+
+   b) Zaun-Lücken geschlossen
+      - Lücke bei Spalte 21 in Reihe 16 (mittlerer Zaun)
+      - Lücke oberhalb 01/10 (topFence3 erweitert auf Spalte 21)
+      - Lücke unterhalb 01/02 (bottomFence2 erweitert auf Spalte 21)
+      - Lücke zwischen Säge und Zaun (topFence4a erweitert auf Spalte 24)
+      Datei: src/main/java/com/hydro/plsbl/ui/component/LagerGrid.java
 
 FRÜHERE ARBEITEN:
 -----------------------------------------------------------------------------
