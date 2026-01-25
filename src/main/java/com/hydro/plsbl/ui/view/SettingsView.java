@@ -1,9 +1,13 @@
 package com.hydro.plsbl.ui.view;
 
+import com.hydro.plsbl.service.IngotTypeService;
+import com.hydro.plsbl.service.ProductService;
 import com.hydro.plsbl.service.SettingsService;
 import com.hydro.plsbl.simulator.CraneSimulatorConfig;
 import com.hydro.plsbl.simulator.CraneSimulatorService;
 import com.hydro.plsbl.ui.MainLayout;
+import com.hydro.plsbl.ui.dialog.IngotTypeDialog;
+import com.hydro.plsbl.ui.dialog.ProductDialog;
 import com.vaadin.flow.component.button.Button;
 import com.vaadin.flow.component.button.ButtonVariant;
 import com.vaadin.flow.component.formlayout.FormLayout;
@@ -39,6 +43,8 @@ public class SettingsView extends VerticalLayout {
     private final SettingsService settingsService;
     private final CraneSimulatorConfig simulatorConfig;
     private final CraneSimulatorService simulatorService;
+    private final ProductService productService;
+    private final IngotTypeService ingotTypeService;
 
     // Tabs
     private VerticalLayout sawContent;
@@ -50,6 +56,7 @@ public class SettingsView extends VerticalLayout {
     private VerticalLayout generalContent;
     private VerticalLayout colorsContent;
     private VerticalLayout kafkaContent;
+    private VerticalLayout masterDataContent;
 
     // Säge-Felder
     private IntegerField sawXField;
@@ -133,10 +140,14 @@ public class SettingsView extends VerticalLayout {
 
     public SettingsView(SettingsService settingsService,
                         CraneSimulatorConfig simulatorConfig,
-                        CraneSimulatorService simulatorService) {
+                        CraneSimulatorService simulatorService,
+                        ProductService productService,
+                        IngotTypeService ingotTypeService) {
         this.settingsService = settingsService;
         this.simulatorConfig = simulatorConfig;
         this.simulatorService = simulatorService;
+        this.productService = productService;
+        this.ingotTypeService = ingotTypeService;
 
         setSizeFull();
         setPadding(true);
@@ -172,6 +183,7 @@ public class SettingsView extends VerticalLayout {
         generalContent = createGeneralTab();
         colorsContent = createColorsTab();
         kafkaContent = createKafkaTab();
+        masterDataContent = createMasterDataTab();
 
         // Initial nur Säge anzeigen
         craneContent.setVisible(false);
@@ -182,6 +194,7 @@ public class SettingsView extends VerticalLayout {
         generalContent.setVisible(false);
         colorsContent.setVisible(false);
         kafkaContent.setVisible(false);
+        masterDataContent.setVisible(false);
 
         // Tabs erstellen
         Tab sawTab = new Tab(VaadinIcon.SCISSORS.create(), new Span("Säge"));
@@ -193,8 +206,9 @@ public class SettingsView extends VerticalLayout {
         Tab generalTab = new Tab(VaadinIcon.COG.create(), new Span("Allgemein"));
         Tab colorsTab = new Tab(VaadinIcon.PAINT_ROLL.create(), new Span("Farben"));
         Tab kafkaTab = new Tab(VaadinIcon.ENVELOPE.create(), new Span("Kafka"));
+        Tab masterDataTab = new Tab(VaadinIcon.DATABASE.create(), new Span("Stammdaten"));
 
-        Tabs tabs = new Tabs(sawTab, craneTab, warehouseTab, simulatorTab, spsTab, loadingTab, generalTab, colorsTab, kafkaTab);
+        Tabs tabs = new Tabs(sawTab, craneTab, warehouseTab, simulatorTab, spsTab, loadingTab, generalTab, colorsTab, kafkaTab, masterDataTab);
         tabs.addSelectedChangeListener(event -> {
             sawContent.setVisible(event.getSelectedTab() == sawTab);
             craneContent.setVisible(event.getSelectedTab() == craneTab);
@@ -205,11 +219,12 @@ public class SettingsView extends VerticalLayout {
             generalContent.setVisible(event.getSelectedTab() == generalTab);
             colorsContent.setVisible(event.getSelectedTab() == colorsTab);
             kafkaContent.setVisible(event.getSelectedTab() == kafkaTab);
+            masterDataContent.setVisible(event.getSelectedTab() == masterDataTab);
         });
 
         add(tabs);
         add(sawContent, craneContent, warehouseContent, simulatorContent, spsContent,
-            loadingContent, generalContent, colorsContent, kafkaContent);
+            loadingContent, generalContent, colorsContent, kafkaContent, masterDataContent);
     }
 
     private VerticalLayout createSawTab() {
@@ -1065,6 +1080,57 @@ public class SettingsView extends VerticalLayout {
         // Speichern Button
         layout.add(new Hr());
         layout.add(createSaveButton(() -> saveKafkaSettings()));
+
+        return layout;
+    }
+
+    private VerticalLayout createMasterDataTab() {
+        VerticalLayout layout = new VerticalLayout();
+        layout.setPadding(false);
+        layout.setSpacing(true);
+
+        // Produkte/Artikel
+        Span section1 = new Span("Produkte / Artikel");
+        section1.getStyle().set("font-weight", "bold").set("font-size", "16px");
+        layout.add(section1);
+
+        Span productInfo = new Span("Verwalten Sie die Artikel-Stammdaten (Produktnummern, Beschreibungen, Max. pro Lagerplatz)");
+        productInfo.getStyle().set("color", "gray");
+        layout.add(productInfo);
+
+        Button productButton = new Button("Artikel verwalten", VaadinIcon.PACKAGE.create());
+        productButton.addThemeVariants(ButtonVariant.LUMO_PRIMARY);
+        productButton.addClickListener(e -> {
+            ProductDialog dialog = new ProductDialog(productService);
+            dialog.open();
+        });
+        layout.add(productButton);
+
+        layout.add(new Hr());
+
+        // Barrentypen
+        Span section2 = new Span("Barrentypen");
+        section2.getStyle().set("font-weight", "bold").set("font-size", "16px");
+        layout.add(section2);
+
+        Span ingotTypeInfo = new Span("Konfigurieren Sie Barrentypen mit Längenbereichen, Gewichtslimits und Lagerberechtigungen");
+        ingotTypeInfo.getStyle().set("color", "gray");
+        layout.add(ingotTypeInfo);
+
+        Button ingotTypeButton = new Button("Barrentypen verwalten", VaadinIcon.CUBES.create());
+        ingotTypeButton.addThemeVariants(ButtonVariant.LUMO_PRIMARY);
+        ingotTypeButton.addClickListener(e -> {
+            IngotTypeDialog dialog = new IngotTypeDialog(ingotTypeService);
+            dialog.open();
+        });
+        layout.add(ingotTypeButton);
+
+        layout.add(new Hr());
+
+        // Hinweis
+        Span hint = new Span("Weitere Stammdaten (Lagerplätze, etc.) können in den jeweiligen Views bearbeitet werden.");
+        hint.getStyle().set("color", "gray").set("font-style", "italic");
+        layout.add(hint);
 
         return layout;
     }

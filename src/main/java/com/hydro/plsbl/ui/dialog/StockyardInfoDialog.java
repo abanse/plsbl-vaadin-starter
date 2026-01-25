@@ -3,9 +3,11 @@ package com.hydro.plsbl.ui.dialog;
 import com.hydro.plsbl.dto.IngotDTO;
 import com.hydro.plsbl.dto.StockyardDTO;
 import com.hydro.plsbl.dto.StockyardStatusDTO;
+import com.hydro.plsbl.dto.TransportOrderDTO;
 import com.hydro.plsbl.entity.enums.StockyardUsage;
 import com.hydro.plsbl.service.IngotService;
 import com.hydro.plsbl.service.StockyardService;
+import com.hydro.plsbl.service.TransportOrderService;
 import com.vaadin.flow.component.button.Button;
 import com.vaadin.flow.component.button.ButtonVariant;
 import com.vaadin.flow.component.confirmdialog.ConfirmDialog;
@@ -39,35 +41,44 @@ public class StockyardInfoDialog extends Dialog {
     private final IngotService ingotService;
     private final StockyardService stockyardService;
     private final PlcService plcService;
+    private final TransportOrderService transportOrderService;
     private Consumer<StockyardDTO> onEdit;
     private Consumer<IngotDTO> onIngotEdit;
     private Consumer<Void> onRelocated;
     private Consumer<StockyardDTO> onMerge;
     private Consumer<StockyardDTO> onSplit;
     private Grid<IngotDTO> ingotGrid;
+    private Grid<TransportOrderDTO> orderGrid;
 
     public StockyardInfoDialog(StockyardDTO stockyard, IngotService ingotService,
-                               StockyardService stockyardService, PlcService plcService) {
+                               StockyardService stockyardService, PlcService plcService,
+                               TransportOrderService transportOrderService) {
         this.stockyard = stockyard;
         this.ingotService = ingotService;
         this.stockyardService = stockyardService;
         this.plcService = plcService;
+        this.transportOrderService = transportOrderService;
 
         setHeaderTitle("Lagerplatz " + stockyard.getYardNumber());
         setWidth("750px");
-        setHeight("650px");
+        setHeight("750px");  // Erhöht für Transportaufträge
 
         createContent();
         createFooter();
     }
 
     // Backwards compatibility constructors
+    public StockyardInfoDialog(StockyardDTO stockyard, IngotService ingotService,
+                               StockyardService stockyardService, PlcService plcService) {
+        this(stockyard, ingotService, stockyardService, plcService, null);
+    }
+
     public StockyardInfoDialog(StockyardDTO stockyard, IngotService ingotService, StockyardService stockyardService) {
-        this(stockyard, ingotService, stockyardService, null);
+        this(stockyard, ingotService, stockyardService, null, null);
     }
 
     public StockyardInfoDialog(StockyardDTO stockyard, IngotService ingotService) {
-        this(stockyard, ingotService, null, null);
+        this(stockyard, ingotService, null, null, null);
     }
 
     private void createContent() {
@@ -88,6 +99,13 @@ public class StockyardInfoDialog extends Dialog {
         content.add(new Hr());
         content.add(new H3("Barren auf diesem Platz"));
         content.add(createIngotGrid());
+
+        // Transportaufträge (wenn Service verfügbar)
+        if (transportOrderService != null) {
+            content.add(new Hr());
+            content.add(new H3("Transportaufträge"));
+            content.add(createOrderGrid());
+        }
 
         // Einschränkungen
         if (!stockyard.isToStockAllowed() || !stockyard.isFromStockAllowed()) {
@@ -255,6 +273,17 @@ public class StockyardInfoDialog extends Dialog {
           .setWidth("45px")
           .setFlexGrow(0);
 
+        // Löschen-Spalte mit Button
+        ingotGrid.addComponentColumn(ingot -> {
+            Button deleteBtn = new Button(VaadinIcon.TRASH.create());
+            deleteBtn.addThemeVariants(ButtonVariant.LUMO_SMALL, ButtonVariant.LUMO_ERROR, ButtonVariant.LUMO_TERTIARY);
+            deleteBtn.getElement().setAttribute("title", "Barren löschen");
+            deleteBtn.addClickListener(e -> confirmDeleteIngot(ingot));
+            return deleteBtn;
+        }).setHeader("")
+          .setWidth("45px")
+          .setFlexGrow(0);
+
         // Daten laden
         loadIngotData();
 
@@ -266,6 +295,130 @@ public class StockyardInfoDialog extends Dialog {
             List<IngotDTO> ingots = ingotService.findByStockyardId(stockyard.getId());
             ingotGrid.setItems(ingots);
             ingotGrid.setVisible(!ingots.isEmpty());
+        }
+    }
+
+    private void confirmDeleteIngot(IngotDTO ingot) {
+        ConfirmDialog confirm = new ConfirmDialog();
+        confirm.setHeader("Barren löschen?");
+        confirm.setText("Möchten Sie den Barren " + ingot.getIngotNo() +
+            " wirklich löschen? Diese Aktion kann nicht rückgängig gemacht werden.");
+        confirm.setCancelable(true);
+        confirm.setCancelText("Abbrechen");
+        confirm.setConfirmText("Löschen");
+        confirm.setConfirmButtonTheme("error primary");
+        confirm.addConfirmListener(e -> deleteIngot(ingot));
+        confirm.open();
+    }
+
+    private void deleteIngot(IngotDTO ingot) {
+        try {
+            if (ingotService != null) {
+                ingotService.delete(ingot.getId());
+                Notification.show("Barren " + ingot.getIngotNo() + " wurde gelöscht",
+                    3000, Notification.Position.BOTTOM_START)
+                    .addThemeVariants(NotificationVariant.LUMO_SUCCESS);
+                loadIngotData();  // Grid aktualisieren
+
+                // LagerView aktualisieren (Lagerplatz-Anzeige)
+                if (onRelocated != null) {
+                    onRelocated.accept(null);
+                }
+            }
+        } catch (Exception e) {
+            Notification.show("Fehler beim Löschen: " + e.getMessage(),
+                5000, Notification.Position.MIDDLE)
+                .addThemeVariants(NotificationVariant.LUMO_ERROR);
+        }
+    }
+
+    private Grid<TransportOrderDTO> createOrderGrid() {
+        orderGrid = new Grid<>();
+        orderGrid.setHeight("150px");
+        orderGrid.setWidthFull();
+
+        // Header-Styling - Hellgrüner Hintergrund
+        orderGrid.addClassName("styled-header-grid");
+        orderGrid.getElement().executeJs(
+            "this.shadowRoot.querySelector('thead').style.backgroundColor = '#c8e6c9';" +
+            "this.shadowRoot.querySelector('thead').style.color = '#2e7d32';"
+        );
+
+        // Spalten
+        orderGrid.addColumn(TransportOrderDTO::getTransportNo)
+            .setHeader("Auftrag-Nr")
+            .setAutoWidth(true)
+            .setFlexGrow(0);
+
+        orderGrid.addColumn(order -> order.getStatus() != null ? order.getStatus().getDisplayName() : "-")
+            .setHeader("Status")
+            .setAutoWidth(true)
+            .setFlexGrow(0);
+
+        orderGrid.addColumn(TransportOrderDTO::getFromYardNo)
+            .setHeader("Von")
+            .setAutoWidth(true)
+            .setFlexGrow(0);
+
+        orderGrid.addColumn(TransportOrderDTO::getToYardNo)
+            .setHeader("Nach")
+            .setAutoWidth(true)
+            .setFlexGrow(0);
+
+        orderGrid.addColumn(TransportOrderDTO::getIngotNo)
+            .setHeader("Barren")
+            .setAutoWidth(true)
+            .setFlexGrow(1);
+
+        // Löschen-Spalte mit Button
+        orderGrid.addComponentColumn(order -> {
+            Button deleteBtn = new Button(VaadinIcon.TRASH.create());
+            deleteBtn.addThemeVariants(ButtonVariant.LUMO_SMALL, ButtonVariant.LUMO_ERROR, ButtonVariant.LUMO_TERTIARY);
+            deleteBtn.getElement().setAttribute("title", "Auftrag löschen");
+            deleteBtn.addClickListener(e -> confirmDeleteOrder(order));
+            return deleteBtn;
+        }).setHeader("")
+          .setWidth("45px")
+          .setFlexGrow(0);
+
+        // Daten laden
+        loadOrderData();
+
+        return orderGrid;
+    }
+
+    private void loadOrderData() {
+        if (transportOrderService != null && orderGrid != null) {
+            List<TransportOrderDTO> orders = transportOrderService.findByStockyardId(stockyard.getId());
+            orderGrid.setItems(orders);
+            orderGrid.setVisible(!orders.isEmpty());
+        }
+    }
+
+    private void confirmDeleteOrder(TransportOrderDTO order) {
+        ConfirmDialog confirm = new ConfirmDialog();
+        confirm.setHeader("Transportauftrag löschen?");
+        confirm.setText("Möchten Sie den Transportauftrag " + order.getTransportNo() +
+            " wirklich löschen? Diese Aktion kann nicht rückgängig gemacht werden.");
+        confirm.setCancelable(true);
+        confirm.setCancelText("Abbrechen");
+        confirm.setConfirmText("Löschen");
+        confirm.setConfirmButtonTheme("error primary");
+        confirm.addConfirmListener(e -> deleteOrder(order));
+        confirm.open();
+    }
+
+    private void deleteOrder(TransportOrderDTO order) {
+        try {
+            transportOrderService.delete(order.getId());
+            Notification.show("Auftrag " + order.getTransportNo() + " wurde gelöscht",
+                3000, Notification.Position.BOTTOM_START)
+                .addThemeVariants(NotificationVariant.LUMO_SUCCESS);
+            loadOrderData();  // Grid aktualisieren
+        } catch (Exception e) {
+            Notification.show("Fehler beim Löschen: " + e.getMessage(),
+                5000, Notification.Position.MIDDLE)
+                .addThemeVariants(NotificationVariant.LUMO_ERROR);
         }
     }
 

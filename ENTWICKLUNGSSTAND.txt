@@ -1,0 +1,160 @@
+=============================================================================
+ENTWICKLUNGSSTAND - PLSBL Vaadin Starter
+Stand: 25.01.2026
+=============================================================================
+
+AKTUELLES THEMA: Barrentypen-Konfiguration (wie Original-App)
+-----------------------------------------------------------------------------
+
+ZIEL:
+- Barrentypen konfigurierbar machen (KURZ, MITTEL, LANG)
+- Längenbereiche statt fester Threshold
+- Berechtigungen pro Typ (intern/extern, auslagerbar, auto)
+- Gewichtslimits
+
+ABGESCHLOSSENE ARBEITEN:
+-----------------------------------------------------------------------------
+
+1. [NEU 25.01.2026] Barrentypen-System implementiert
+
+   a) Neue Entity: IngotType (MD_INGOTTYPE)
+      - Name, Beschreibung
+      - LengthType (SHORT, MEDIUM, LONG)
+      - Berechtigungen: internalAllowed, externalAllowed, retrievalAllowed, autoRetrieval
+      - Längenbereiche: minLength, maxLength
+      - Gewichtslimits: minWeight, maxWeight
+      - Regex für Produktnummer-Matching
+      - Priorität
+      Datei: src/main/java/com/hydro/plsbl/entity/masterdata/IngotType.java
+
+   b) Neues Enum: LengthType (SHORT, MEDIUM, LONG)
+      Datei: src/main/java/com/hydro/plsbl/entity/enums/LengthType.java
+
+   c) Neuer Service: IngotTypeService
+      - CRUD-Operationen
+      - determineIngotType() - ermittelt Barrentyp basierend auf Eigenschaften
+      - determineLengthType() - für Rückwärtskompatibilität
+      Datei: src/main/java/com/hydro/plsbl/service/IngotTypeService.java
+
+   d) Neuer Dialog: IngotTypeDialog
+      - Liste aller Barrentypen
+      - Formular zum Anlegen/Bearbeiten
+      - Alle Felder konfigurierbar
+      Datei: src/main/java/com/hydro/plsbl/ui/dialog/IngotTypeDialog.java
+
+   e) SettingsView erweitert
+      - Tab "Stammdaten" mit Button "Barrentypen verwalten"
+      Datei: src/main/java/com/hydro/plsbl/ui/view/SettingsView.java
+
+   f) IngotStorageService angepasst
+      - Verwendet jetzt IngotTypeService für Typ-Ermittlung
+      - Fallback auf alte LONG_INGOT_THRESHOLD Logik wenn kein Typ passt
+      Datei: src/main/java/com/hydro/plsbl/service/IngotStorageService.java
+
+   g) Schema erweitert
+      - H2: schema-h2.sql mit MD_INGOTTYPE Tabelle
+      - H2: data-h2.sql mit Standard-Barrentypen (KURZ, LANG, MITTEL)
+      - Oracle: schema-ingottype.sql für Migration
+      Dateien: src/main/resources/schema-h2.sql, data-h2.sql, schema-ingottype.sql
+
+   Standard-Barrentypen (aus barrentypen.xls):
+   | Name   | Typ    | Länge (mm)   | Intern | Extern | Auslagerbar | Auto |
+   |--------|--------|--------------|--------|--------|-------------|------|
+   | KURZ   | SHORT  | 3500-4300    | Ja     | Ja     | Ja          | Nein |
+   | LANG   | LONG   | 7500-8700    | Ja     | Ja     | Nein        | Nein |
+   | MITTEL | MEDIUM | 4300-7400    | Nein   | Ja     | Ja          | Ja   |
+
+2. [NEU 25.01.2026] Produkt-Verwaltung (Stammdaten)
+
+   a) ProductService
+      Datei: src/main/java/com/hydro/plsbl/service/ProductService.java
+
+   b) ProductDialog
+      Datei: src/main/java/com/hydro/plsbl/ui/dialog/ProductDialog.java
+
+   c) SettingsView Tab "Stammdaten" mit "Artikel verwalten"
+
+3. [NEU 25.01.2026] Bugfix: Barren-Löschen aktualisiert UI
+
+   a) IngotService.delete() aktualisiert jetzt StockyardStatus
+      Datei: src/main/java/com/hydro/plsbl/service/IngotService.java
+
+   b) StockyardInfoDialog ruft onRelocated Callback nach Löschen
+      Datei: src/main/java/com/hydro/plsbl/ui/dialog/StockyardInfoDialog.java
+
+4. [NEU 25.01.2026] Test-Endpunkte erweitert
+
+   a) GET /api/test/stockyards/usage/{usage}
+      - ?available=true zeigt nur verfügbare Plätze
+      - Zeigt ingotCount, maxIngots pro Platz
+
+   b) GET /api/test/stockyard/{id}
+      - Details zu einem Lagerplatz
+
+FRÜHERE ARBEITEN:
+-----------------------------------------------------------------------------
+
+5. [ERLEDIGT] IngotStorageService.java - Längenbasierte Lagerplatz-Auswahl
+6. [ERLEDIGT] Oracle-Profil aktiviert
+7. [ERLEDIGT] Oracle-Kompatibilität - NOT NULL Spalten
+8. [ERLEDIGT] Transport-Nummer Format gekürzt (TA26-0001)
+9. [ERLEDIGT] Kran-Visualisierung korrigiert (LONG-Lagerplätze)
+
+ORACLE-MIGRATION für Barrentypen:
+-----------------------------------------------------------------------------
+
+```sql
+-- In Oracle ausführen:
+CREATE TABLE MD_INGOTTYPE (
+    ID NUMBER(19) NOT NULL,
+    SERIAL NUMBER(19) DEFAULT 1,
+    TABLESERIAL NUMBER(19) DEFAULT 1,
+    NAME VARCHAR2(20) NOT NULL,
+    DESCRIPTION VARCHAR2(100),
+    LENGTH_TYPE CHAR(1),
+    INTERNAL_ALLOWED NUMBER(1) DEFAULT 1,
+    EXTERNAL_ALLOWED NUMBER(1) DEFAULT 1,
+    RETRIEVAL_ALLOWED NUMBER(1) DEFAULT 1,
+    AUTO_RETRIEVAL NUMBER(1) DEFAULT 0,
+    MIN_LENGTH NUMBER(10),
+    MAX_LENGTH NUMBER(10),
+    MIN_WIDTH NUMBER(10),
+    MAX_WIDTH NUMBER(10),
+    MIN_THICKNESS NUMBER(10),
+    MAX_THICKNESS NUMBER(10),
+    MIN_WEIGHT NUMBER(10),
+    MAX_WEIGHT NUMBER(10),
+    PRODUCT_REGEX VARCHAR2(200),
+    PRIORITY NUMBER(5) DEFAULT 0,
+    CONSTRAINT PK_INGOTTYPE PRIMARY KEY (ID),
+    CONSTRAINT UK_INGOTTYPE_NAME UNIQUE (NAME)
+);
+
+-- Initiale Daten
+INSERT INTO MD_INGOTTYPE (ID, NAME, DESCRIPTION, LENGTH_TYPE, INTERNAL_ALLOWED, EXTERNAL_ALLOWED, RETRIEVAL_ALLOWED, AUTO_RETRIEVAL, MIN_LENGTH, MAX_LENGTH, MAX_WEIGHT, PRIORITY)
+VALUES (1, 'KURZ', 'normale kurze Barren', 'S', 1, 1, 1, 0, 3500, 4300, NULL, 0);
+
+INSERT INTO MD_INGOTTYPE (ID, NAME, DESCRIPTION, LENGTH_TYPE, INTERNAL_ALLOWED, EXTERNAL_ALLOWED, RETRIEVAL_ALLOWED, AUTO_RETRIEVAL, MIN_LENGTH, MAX_LENGTH, MAX_WEIGHT, PRIORITY)
+VALUES (2, 'LANG', 'normale lange Barren', 'L', 1, 1, 0, 0, 7500, 8700, NULL, 0);
+
+INSERT INTO MD_INGOTTYPE (ID, NAME, DESCRIPTION, LENGTH_TYPE, INTERNAL_ALLOWED, EXTERNAL_ALLOWED, RETRIEVAL_ALLOWED, AUTO_RETRIEVAL, MIN_LENGTH, MAX_LENGTH, MAX_WEIGHT, PRIORITY)
+VALUES (3, 'MITTEL', 'mittellange Barren', 'M', 0, 1, 1, 1, 4300, 7400, 18000, 0);
+
+COMMIT;
+```
+
+ZUGRIFF auf neue Funktionen:
+-----------------------------------------------------------------------------
+
+1. Einstellungen → Tab "Stammdaten" → "Barrentypen verwalten"
+2. Einstellungen → Tab "Stammdaten" → "Artikel verwalten"
+
+NÄCHSTE SCHRITTE:
+-----------------------------------------------------------------------------
+
+1. Oracle-Migration für MD_INGOTTYPE ausführen
+2. MITTEL-Barren: Externe Lagerung implementieren (YARD_TYPE='E')
+3. Auto-Auslagerung für MITTEL-Barren implementieren
+4. Regex-Matching für Produktnummern testen
+
+=============================================================================

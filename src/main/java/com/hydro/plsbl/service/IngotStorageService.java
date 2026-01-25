@@ -1,8 +1,10 @@
 package com.hydro.plsbl.service;
 
 import com.hydro.plsbl.dto.IngotDTO;
+import com.hydro.plsbl.dto.IngotTypeDTO;
 import com.hydro.plsbl.dto.TransportOrderDTO;
 import com.hydro.plsbl.entity.masterdata.Product;
+import com.hydro.plsbl.entity.enums.LengthType;
 import com.hydro.plsbl.entity.enums.StockyardUsage;
 import com.hydro.plsbl.entity.masterdata.Stockyard;
 import com.hydro.plsbl.entity.transdata.StockyardStatus;
@@ -52,6 +54,7 @@ public class IngotStorageService {
     private final KafkaConsumerService kafkaConsumerService;
     private final KafkaProducerService kafkaProducerService;
     private final IngotService ingotService;
+    private final IngotTypeService ingotTypeService;
     private final TransportOrderService transportOrderService;
     private final ProductRepository productRepository;
     private final StockyardRepository stockyardRepository;
@@ -62,6 +65,7 @@ public class IngotStorageService {
             KafkaConsumerService kafkaConsumerService,
             KafkaProducerService kafkaProducerService,
             IngotService ingotService,
+            IngotTypeService ingotTypeService,
             TransportOrderService transportOrderService,
             ProductRepository productRepository,
             StockyardRepository stockyardRepository,
@@ -70,6 +74,7 @@ public class IngotStorageService {
         this.kafkaConsumerService = kafkaConsumerService;
         this.kafkaProducerService = kafkaProducerService;
         this.ingotService = ingotService;
+        this.ingotTypeService = ingotTypeService;
         this.transportOrderService = transportOrderService;
         this.productRepository = productRepository;
         this.stockyardRepository = stockyardRepository;
@@ -400,13 +405,33 @@ public class IngotStorageService {
      * @param ingotLength Laenge des Barrens in mm - bestimmt ob SHORT oder LONG Platz
      */
     private Optional<Stockyard> findTargetStockyard(Long productId, String preferredYardNo, int ingotLength) {
-        // Bestimme ob kurzer oder langer Barren
-        boolean isLongIngot = ingotLength > LONG_INGOT_THRESHOLD;
-        StockyardUsage requiredUsage = isLongIngot ? StockyardUsage.LONG : StockyardUsage.SHORT;
+        // Bestimme Barrentyp ueber IngotTypeService
+        Optional<IngotTypeDTO> ingotType = ingotTypeService.determineIngotType(ingotLength, null, null, null, null);
+        LengthType lengthType = ingotType.map(IngotTypeDTO::getLengthType).orElse(null);
+
+        // LengthType auf StockyardUsage mappen
+        // MEDIUM hat kein direktes Mapping -> AUTOMATIC als Fallback
+        StockyardUsage requiredUsage;
+        if (lengthType == LengthType.LONG) {
+            requiredUsage = StockyardUsage.LONG;
+        } else if (lengthType == LengthType.SHORT) {
+            requiredUsage = StockyardUsage.SHORT;
+        } else {
+            // MEDIUM oder unbekannt -> Fallback-Logik
+            requiredUsage = ingotLength > LONG_INGOT_THRESHOLD ? StockyardUsage.LONG : StockyardUsage.SHORT;
+        }
+
         log.info("========================================");
         log.info("SUCHE ZIEL-LAGERPLATZ");
-        log.info("  Barren-Laenge: {}mm (Grenze: {}mm)", ingotLength, LONG_INGOT_THRESHOLD);
-        log.info("  Kategorie: {} ({})", requiredUsage.getDisplayName(), isLongIngot ? "LANG" : "KURZ");
+        log.info("  Barren-Laenge: {}mm", ingotLength);
+        if (ingotType.isPresent()) {
+            IngotTypeDTO type = ingotType.get();
+            log.info("  Barrentyp: {} ({})", type.getName(), type.getLengthType() != null ? type.getLengthType().getDisplayName() : "?");
+            log.info("  Intern erlaubt: {}, Extern erlaubt: {}", type.getInternalAllowed(), type.getExternalAllowed());
+        } else {
+            log.info("  Barrentyp: UNBEKANNT (Fallback: Grenze {}mm)", LONG_INGOT_THRESHOLD);
+        }
+        log.info("  Ziel-Kategorie: {}", requiredUsage.getDisplayName());
         log.info("========================================");
 
         // 1. Gewuenschter Lagerplatz pruefen (muss exakt passen oder AUTOMATIC sein)
@@ -466,6 +491,19 @@ public class IngotStorageService {
             }
         }
 
+        // 4b. Nicht-vollen Lagerplatz mit EXAKT passender Groesse suchen
+        // (fuer neues Produkt - Platz hat noch Kapazitaet)
+        for (Stockyard yard : exactMatchYards) {
+            if (yard.isToStockAllowed() && hasCapacity(yard, productId)) {
+                log.info("========================================");
+                log.info("ERGEBNIS: {} Platz mit Kapazitaet gefunden!", requiredUsage.getDisplayName());
+                log.info("  Lagerplatz: {} (ID={})", yard.getYardNumber(), yard.getId());
+                log.info("  Position: X={}, Y={}, Z={}", yard.getXPosition(), yard.getYPosition(), yard.getZPosition());
+                log.info("========================================");
+                return Optional.of(yard);
+            }
+        }
+
         // === FALLBACK: AUTOMATIC Plaetze ===
         log.info("Kein exakt passender Platz gefunden, suche AUTOMATIC Fallback...");
 
@@ -487,8 +525,8 @@ public class IngotStorageService {
             }
         }
 
-        log.warn("Kein geeigneter Lagerplatz fuer {} Barren gefunden!",
-            isLongIngot ? "langen" : "kurzen");
+        log.warn("Kein geeigneter Lagerplatz fuer {} Barren ({}mm) gefunden!",
+            requiredUsage.getDisplayName(), ingotLength);
         return Optional.empty();
     }
 
@@ -584,6 +622,47 @@ public class IngotStorageService {
         int count = ingotService.countByStockyardId(stockyardId);
         log.info("  isYardEmpty check: StockyardID={}, count={}, isEmpty={}", stockyardId, count, count == 0);
         return count == 0;
+    }
+
+    /**
+     * Prueft ob ein Lagerplatz noch Kapazitaet hat und das gleiche Produkt hat
+     * (oder leer ist, dann kann jedes Produkt darauf)
+     */
+    private boolean hasCapacity(Stockyard yard, Long productId) {
+        int currentCount = ingotService.countByStockyardId(yard.getId());
+        int pendingTransports = countPendingTransportsToYard(yard.getId());
+        int totalExpected = currentCount + pendingTransports;
+        int maxIngots = yard.getMaxIngots();
+
+        // Kein Platz mehr?
+        if (totalExpected >= maxIngots) {
+            return false;
+        }
+
+        // Platz ist leer - kann jedes Produkt aufnehmen
+        if (currentCount == 0) {
+            log.info("  hasCapacity: {} ist leer, Kapazitaet {}/{}", yard.getYardNumber(), totalExpected, maxIngots);
+            return true;
+        }
+
+        // Platz hat Barren - pruefen ob gleiches Produkt
+        Optional<StockyardStatus> status = stockyardStatusRepository.findByStockyardId(yard.getId());
+        if (status.isPresent() && status.get().getProductId() != null) {
+            boolean sameProduct = status.get().getProductId().equals(productId);
+            if (sameProduct) {
+                log.info("  hasCapacity: {} hat gleiches Produkt, Kapazitaet {}/{}",
+                    yard.getYardNumber(), totalExpected, maxIngots);
+                return true;
+            } else {
+                log.debug("  hasCapacity: {} hat anderes Produkt", yard.getYardNumber());
+                return false;
+            }
+        }
+
+        // Kein Produkt zugeordnet - kann verwendet werden
+        log.info("  hasCapacity: {} hat kein Produkt zugeordnet, Kapazitaet {}/{}",
+            yard.getYardNumber(), totalExpected, maxIngots);
+        return true;
     }
 
     /**

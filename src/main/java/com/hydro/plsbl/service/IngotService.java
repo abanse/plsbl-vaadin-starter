@@ -264,47 +264,76 @@ public class IngotService {
         log.debug("Saving ingot: {}", dto.getId());
 
         boolean isNewIngot = (dto.getId() == null);
-        Ingot entity;
-        if (dto.getId() != null) {
-            // Update - mark as not new so Spring Data JDBC does UPDATE instead of INSERT
-            entity = ingotRepository.findById(dto.getId())
+
+        if (isNewIngot) {
+            // CREATE - Direktes SQL für Oracle-Kompatibilität (TABLESERIAL, etc.)
+            Long nextId = getNextId();
+            dto.setId(nextId);
+
+            jdbcTemplate.update(
+                "INSERT INTO TD_INGOT (ID, SERIAL, TABLESERIAL, INGOT_NO, PRODUCT_ID, PRODUCT_SUFFIX, " +
+                "STOCKYARD_ID, PILE_POSITION, WEIGHT, LENGTH, WIDTH, THICKNESS, " +
+                "HEAD_SAWN, FOOT_SAWN, SCRAP, REVISED, ROTATED, PICKUPS, MOVEMENTS, TRANSPORTS, LOADINGS, IN_STOCK_SINCE, RELEASED_SINCE) " +
+                "VALUES (?, 1, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, ?, ?)",
+                nextId,
+                dto.getIngotNo(),
+                dto.getProductId(),
+                dto.getProductSuffix(),
+                dto.getStockyardId(),
+                dto.getPilePosition(),
+                dto.getWeight(),
+                dto.getLength(),
+                dto.getWidth(),
+                dto.getThickness(),
+                dto.getHeadSawn() != null && dto.getHeadSawn() ? 1 : 0,
+                dto.getFootSawn() != null && dto.getFootSawn() ? 1 : 0,
+                dto.getScrap() != null && dto.getScrap() ? 1 : 0,
+                dto.getRevised() != null && dto.getRevised() ? 1 : 0,
+                dto.getRotated() != null && dto.getRotated() ? 1 : 0,
+                dto.getInStockSince(),
+                dto.getReleasedSince()
+            );
+
+            log.info("Ingot created via SQL: ID={}, ingotNo={}, stockyardId={}",
+                nextId, dto.getIngotNo(), dto.getStockyardId());
+
+            // StockyardStatus aktualisieren
+            if (dto.getStockyardId() != null) {
+                log.info("Updating StockyardStatus for new ingot on stockyard {}", dto.getStockyardId());
+                updateStockyardStatusForNewIngot(dto.getStockyardId(), dto.getProductId());
+            }
+
+            return dto;
+        } else {
+            // UPDATE - Repository verwenden
+            Ingot entity = ingotRepository.findById(dto.getId())
                 .orElseThrow(() -> new IllegalArgumentException("Barren nicht gefunden: " + dto.getId()));
             entity.markNotNew();
-        } else {
-            // Create - ID generieren (NOT NULL in Oracle)
-            entity = new Ingot();
-            Long nextId = getNextId();
-            entity.setId(nextId);
+
+            // Werte übernehmen
+            entity.setIngotNo(dto.getIngotNo());
+            entity.setProductId(dto.getProductId());
+            entity.setProductSuffix(dto.getProductSuffix());
+            entity.setStockyardId(dto.getStockyardId());
+            entity.setPilePosition(dto.getPilePosition());
+            entity.setWeight(dto.getWeight());
+            entity.setLength(dto.getLength());
+            entity.setWidth(dto.getWidth());
+            entity.setThickness(dto.getThickness());
+            entity.setHeadSawn(dto.getHeadSawn());
+            entity.setFootSawn(dto.getFootSawn());
+            entity.setScrap(dto.getScrap());
+            entity.setRevised(dto.getRevised());
+            entity.setRotated(dto.getRotated());
+            entity.setInStockSince(dto.getInStockSince());
+            entity.setReleasedSince(dto.getReleasedSince());
+
+            Ingot saved = ingotRepository.save(entity);
+            log.info("Ingot updated: ID={}, ingotNo={}, stockyardId={}",
+                saved.getId(), saved.getIngotNo(), saved.getStockyardId());
+
+            return toDTO(saved);
         }
-
-        // Werte übernehmen
-        entity.setIngotNo(dto.getIngotNo());
-        entity.setProductId(dto.getProductId());
-        entity.setProductSuffix(dto.getProductSuffix());
-        entity.setStockyardId(dto.getStockyardId());
-        entity.setPilePosition(dto.getPilePosition());
-        entity.setWeight(dto.getWeight());
-        entity.setLength(dto.getLength());
-        entity.setWidth(dto.getWidth());
-        entity.setThickness(dto.getThickness());
-        entity.setHeadSawn(dto.getHeadSawn());
-        entity.setFootSawn(dto.getFootSawn());
-        entity.setScrap(dto.getScrap());
-        entity.setRevised(dto.getRevised());
-        entity.setRotated(dto.getRotated());
-        entity.setInStockSince(dto.getInStockSince());
-        entity.setReleasedSince(dto.getReleasedSince());
-
-        Ingot saved = ingotRepository.save(entity);
-        log.info("Ingot saved: ID={}, ingotNo={}, stockyardId={}", saved.getId(), saved.getIngotNo(), saved.getStockyardId());
-
-        // StockyardStatus aktualisieren wenn neuer Barren erstellt wurde
-        if (isNewIngot && dto.getStockyardId() != null) {
-            log.info("Updating StockyardStatus for new ingot on stockyard {}", dto.getStockyardId());
-            updateStockyardStatusForNewIngot(dto.getStockyardId(), dto.getProductId());
-        }
-
-        return toDTO(saved);
     }
 
     /**
@@ -326,7 +355,7 @@ public class IngotService {
             Long newId = getNextStatusId();
             String yardUsage = getYardUsageForStockyard(stockyardId);
             jdbcTemplate.update(
-                "INSERT INTO TD_STOCKYARDSTATUS (ID, STOCKYARD_ID, PRODUCT_ID, INGOTS_COUNT, YARD_USAGE, PILE_HEIGHT, SERIAL) VALUES (?, ?, ?, 1, ?, 1, 1)",
+                "INSERT INTO TD_STOCKYARDSTATUS (ID, STOCKYARD_ID, PRODUCT_ID, INGOTS_COUNT, YARD_USAGE, PILE_HEIGHT, SERIAL, TABLESERIAL, SCRAP_ON_TOP, REVISED_ON_TOP) VALUES (?, ?, ?, 1, ?, 1, 1, 1, 0, 0)",
                 newId, stockyardId, productId, yardUsage);
             log.info("StockyardStatus CREATED for stockyard {} with ID={}, product={}, yardUsage={}", stockyardId, newId, productId, yardUsage);
         }
@@ -344,13 +373,54 @@ public class IngotService {
     }
 
     /**
-     * Löscht einen Barren
+     * Löscht einen Barren und aktualisiert den StockyardStatus
      */
     @Transactional
     public void delete(Long id) {
-        log.debug("Deleting ingot: {}", id);
+        log.info("Deleting ingot: {}", id);
+
+        // Zuerst Stockyard-ID holen für Status-Update
+        Long stockyardId = null;
+        try {
+            stockyardId = jdbcTemplate.queryForObject(
+                "SELECT STOCKYARD_ID FROM TD_INGOT WHERE ID = ?", Long.class, id);
+        } catch (Exception e) {
+            log.warn("Could not get stockyard for ingot {}: {}", id, e.getMessage());
+        }
+
+        // Barren löschen
         ingotRepository.deleteById(id);
         log.info("Ingot deleted: {}", id);
+
+        // StockyardStatus aktualisieren
+        if (stockyardId != null) {
+            updateStockyardStatusAfterDelete(stockyardId);
+        }
+    }
+
+    /**
+     * Aktualisiert StockyardStatus nachdem ein Barren gelöscht wurde
+     */
+    private void updateStockyardStatusAfterDelete(Long stockyardId) {
+        log.info("Updating StockyardStatus after delete for stockyard {}", stockyardId);
+
+        stockyardStatusRepository.findByStockyardId(stockyardId).ifPresent(status -> {
+            // Tatsächliche Anzahl aus DB zählen
+            int actualCount = countByStockyardId(stockyardId);
+            log.info("Actual ingot count on stockyard {}: {}", stockyardId, actualCount);
+
+            if (actualCount == 0) {
+                // Status löschen wenn leer
+                stockyardStatusRepository.delete(status);
+                log.info("StockyardStatus DELETED for stockyard {} (now empty)", stockyardId);
+            } else {
+                // Anzahl aktualisieren
+                jdbcTemplate.update(
+                    "UPDATE TD_STOCKYARDSTATUS SET INGOTS_COUNT = ?, SERIAL = SERIAL + 1 WHERE ID = ?",
+                    actualCount, status.getId());
+                log.info("StockyardStatus UPDATED for stockyard {}: count={}", stockyardId, actualCount);
+            }
+        });
     }
 
     /**
@@ -417,7 +487,7 @@ public class IngotService {
             Long newId = getNextStatusId();
             String yardUsage = getYardUsageForStockyard(destinationStockyardId);
             jdbcTemplate.update(
-                "INSERT INTO TD_STOCKYARDSTATUS (ID, STOCKYARD_ID, PRODUCT_ID, INGOTS_COUNT, YARD_USAGE, PILE_HEIGHT, SERIAL) VALUES (?, ?, ?, 1, ?, 1, 1)",
+                "INSERT INTO TD_STOCKYARDSTATUS (ID, STOCKYARD_ID, PRODUCT_ID, INGOTS_COUNT, YARD_USAGE, PILE_HEIGHT, SERIAL, TABLESERIAL, SCRAP_ON_TOP, REVISED_ON_TOP) VALUES (?, ?, ?, 1, ?, 1, 1, 1, 0, 0)",
                 newId, destinationStockyardId, productId, yardUsage);
             log.debug("StockyardStatus created for destination stockyard {} with yardUsage={}", destinationStockyardId, yardUsage);
         }
