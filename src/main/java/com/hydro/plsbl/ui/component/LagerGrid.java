@@ -508,10 +508,10 @@ public class LagerGrid extends Div {
             .set("grid-row", "2");
         add(topGate2);
 
-        // Zaun rechts bis zu den Schrott-Plätzen (Spalte 12-20)
+        // Zaun rechts bis zu den Schrott-Plätzen (Spalte 12-21)
         Div topFence3 = createFenceSegment();
         topFence3.getStyle()
-            .set("grid-column", "12 / 21")
+            .set("grid-column", "12 / 22")
             .set("grid-row", "2");
         add(topFence3);
 
@@ -524,12 +524,26 @@ public class LagerGrid extends Div {
 
         // Säge-Ausgang und Ausgangs-Plätze (Spalte 24) - OFFEN für Säge/Kran
 
-        // Zaun zwischen Säge-Ausgang und rechtem Zaun (Spalte 25-28)
-        Div topFence4 = createFenceSegment();
-        topFence4.getStyle()
-            .set("grid-column", "25 / 29")
+        // Zaun zwischen Säge-Ausgang und T3 (Spalte 24-26)
+        Div topFence4a = createFenceSegment();
+        topFence4a.getStyle()
+            .set("grid-column", "24 / 27")
             .set("grid-row", "2");
-        add(topFence4);
+        add(topFence4a);
+
+        // Tor 3 (Spalte 27) - 20px breit, rechts neben der Säge
+        Div topGate3 = createNumberedGate(3, "Rechts neben Säge");
+        topGate3.getStyle()
+            .set("grid-column", "27")
+            .set("grid-row", "2");
+        add(topGate3);
+
+        // Zaun rechts von T3 bis zur Ecke (Spalte 28)
+        Div topFence4b = createFenceSegment();
+        topFence4b.getStyle()
+            .set("grid-column", "28")
+            .set("grid-row", "2");
+        add(topFence4b);
 
         // ============ LINKER ZAUN (Spalte 1) ============
         Div leftFence = createFenceSegment();
@@ -564,14 +578,14 @@ public class LagerGrid extends Div {
         // Zaun von Spalte 12 bis zu den Schrott-Plätzen (Spalte 12-21)
         Div bottomFence2 = createFenceSegment();
         bottomFence2.getStyle()
-            .set("grid-column", "12 / 21")
+            .set("grid-column", "12 / 22")
             .set("grid-row", "16");
         add(bottomFence2);
 
-        // Zaun vor Säge (Spalte 22-23)
+        // Zaun vor Säge (Spalte 21-23)
         Div bottomFence2b = createFenceSegment();
         bottomFence2b.getStyle()
-            .set("grid-column", "22 / 24")
+            .set("grid-column", "21 / 24")
             .set("grid-row", "16");
         add(bottomFence2b);
 
