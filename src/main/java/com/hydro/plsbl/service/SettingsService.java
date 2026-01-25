@@ -124,11 +124,14 @@ public class SettingsService {
         DEFAULTS.put(KEY_SAW_TOLERANZ_Y, new SettingDefinition(330, CAT_SAW, "Toleranz Y [mm]"));
         DEFAULTS.put(KEY_SAW_TOLERANZ_Z, new SettingDefinition(145, CAT_SAW, "Toleranz Z [mm]"));
 
-        // Lager
-        DEFAULTS.put(KEY_LAGER_MIN_X, new SettingDefinition(5000, CAT_WAREHOUSE, "Internes Lager min. X [mm]"));
-        DEFAULTS.put(KEY_LAGER_MIN_Y, new SettingDefinition(9000, CAT_WAREHOUSE, "Internes Lager min. Y [mm]"));
-        DEFAULTS.put(KEY_LAGER_MAX_X, new SettingDefinition(98000, CAT_WAREHOUSE, "Internes Lager max. X [mm]"));
-        DEFAULTS.put(KEY_LAGER_MAX_Y, new SettingDefinition(37000, CAT_WAREHOUSE, "Internes Lager max. Y [mm]"));
+        // Lager - Koordinaten basierend auf Oracle MD_STOCKYARD BOTTOM_CENTER_X/Y
+        // X: 01/xx = 16740mm, 17/xx = 96740mm (Abstand 5000mm pro Spalte)
+        // Y: Reihe 01 = 11530mm, Reihe 10 = 35630mm
+        // Säge-Position (X=9300, Y=36020) wird in LagerView speziell behandelt
+        DEFAULTS.put(KEY_LAGER_MIN_X, new SettingDefinition(16740, CAT_WAREHOUSE, "Internes Lager min. X [mm]"));
+        DEFAULTS.put(KEY_LAGER_MIN_Y, new SettingDefinition(11530, CAT_WAREHOUSE, "Internes Lager min. Y [mm]"));
+        DEFAULTS.put(KEY_LAGER_MAX_X, new SettingDefinition(96740, CAT_WAREHOUSE, "Internes Lager max. X [mm]"));
+        DEFAULTS.put(KEY_LAGER_MAX_Y, new SettingDefinition(35630, CAT_WAREHOUSE, "Internes Lager max. Y [mm]"));
         DEFAULTS.put(KEY_GRID_COLS, new SettingDefinition(17, CAT_WAREHOUSE, "Grid Spalten"));
         DEFAULTS.put(KEY_GRID_ROWS, new SettingDefinition(10, CAT_WAREHOUSE, "Grid Zeilen"));
 

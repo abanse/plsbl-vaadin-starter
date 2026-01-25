@@ -173,6 +173,11 @@ public class CraneSimulatorService {
         // Stockyards in DB speichern
         updateStockyardIds(command.getFromStockyardId(), command.getToStockyardId());
 
+        log.info("=== SIMULATOR COMMAND RECEIVED ===");
+        log.info("PICKUP Position: X={}, Y={}, Z={}", command.getPickupX(), command.getPickupY(), command.getPickupZ());
+        log.info("RELEASE Position: X={}, Y={}, Z={}", command.getReleaseX(), command.getReleaseY(), command.getReleaseZ());
+        log.info("Current crane position: ({},{},{})", xPosition, yPosition, zPosition);
+        log.info("==================================");
         log.info("Command accepted: {} - starting from ({},{},{})", command, xPosition, yPosition, zPosition);
     }
 

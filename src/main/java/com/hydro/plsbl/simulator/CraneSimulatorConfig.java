@@ -43,12 +43,12 @@ public class CraneSimulatorConfig {
     /**
      * Parkposition X in mm
      */
-    private int parkX = 3000;
+    private int parkX = 27000;
 
     /**
      * Parkposition Y in mm
      */
-    private int parkY = 3000;
+    private int parkY = 18000;
 
     /**
      * Automatisch starten

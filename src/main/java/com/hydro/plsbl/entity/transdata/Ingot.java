@@ -27,6 +27,9 @@ public class Ingot implements Persistable<Long> {
     @Column("SERIAL")
     private Long serial;
 
+    @Column("TABLESERIAL")
+    private Long tableSerial = 1L;
+
     @Column("INGOT_NO")
     private String ingotNo;
 
@@ -101,6 +104,14 @@ public class Ingot implements Persistable<Long> {
 
     public void setSerial(Long serial) {
         this.serial = serial;
+    }
+
+    public Long getTableSerial() {
+        return tableSerial;
+    }
+
+    public void setTableSerial(Long tableSerial) {
+        this.tableSerial = tableSerial;
     }
 
     public String getIngotNo() {

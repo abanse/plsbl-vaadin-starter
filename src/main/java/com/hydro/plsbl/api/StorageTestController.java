@@ -1,7 +1,10 @@
 package com.hydro.plsbl.api;
 
 import com.hydro.plsbl.dto.TransportOrderDTO;
+import com.hydro.plsbl.entity.masterdata.Stockyard;
 import com.hydro.plsbl.kafka.dto.KafkaPickupOrderMessage;
+import com.hydro.plsbl.repository.StockyardRepository;
+import com.hydro.plsbl.service.IngotService;
 import com.hydro.plsbl.service.IngotStorageService;
 import com.hydro.plsbl.service.TransportOrderProcessor;
 import org.slf4j.Logger;
@@ -11,6 +14,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDateTime;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -32,12 +36,18 @@ public class StorageTestController {
 
     private final IngotStorageService ingotStorageService;
     private final TransportOrderProcessor orderProcessor;
+    private final StockyardRepository stockyardRepository;
+    private final IngotService ingotService;
     private final AtomicLong testCounter = new AtomicLong(System.currentTimeMillis());
 
     public StorageTestController(IngotStorageService ingotStorageService,
-                                  TransportOrderProcessor orderProcessor) {
+                                  TransportOrderProcessor orderProcessor,
+                                  StockyardRepository stockyardRepository,
+                                  IngotService ingotService) {
         this.ingotStorageService = ingotStorageService;
         this.orderProcessor = orderProcessor;
+        this.stockyardRepository = stockyardRepository;
+        this.ingotService = ingotService;
     }
 
     /**
@@ -289,6 +299,88 @@ public class StorageTestController {
             response.put("error", e.getMessage());
             return ResponseEntity.badRequest().body(response);
         }
+    }
+
+    /**
+     * Gibt alle Stockyards mit einer bestimmten Usage zurueck
+     */
+    /**
+     * Gibt alle Stockyards mit einer bestimmten Usage zurueck.
+     * Optional: ?available=true zeigt nur verfuegbare Plaetze (toStockAllowed=true und leer)
+     */
+    @GetMapping("/stockyards/usage/{usage}")
+    public ResponseEntity<Map<String, Object>> getStockyardsByUsage(
+            @PathVariable String usage,
+            @RequestParam(required = false, defaultValue = "false") boolean available) {
+        Map<String, Object> response = new HashMap<>();
+        response.put("timestamp", LocalDateTime.now().toString());
+        response.put("requestedUsage", usage);
+        response.put("filterAvailable", available);
+
+        List<Map<String, Object>> yards = new java.util.ArrayList<>();
+        int totalCount = 0;
+        int availableCount = 0;
+
+        for (Stockyard yard : stockyardRepository.findAll()) {
+            String yardUsage = yard.getUsage() != null ? yard.getUsage().name() : "null";
+            if (yardUsage.equalsIgnoreCase(usage) ||
+                (usage.equalsIgnoreCase("null") && yard.getUsage() == null)) {
+
+                totalCount++;
+                int ingotCount = ingotService.countByStockyardId(yard.getId());
+                boolean isEmpty = ingotCount == 0;
+                boolean isAvailable = yard.isToStockAllowed() && isEmpty;
+
+                if (isAvailable) availableCount++;
+
+                // Filter wenn available=true
+                if (available && !isAvailable) continue;
+
+                Map<String, Object> yardInfo = new HashMap<>();
+                yardInfo.put("id", yard.getId());
+                yardInfo.put("yardNumber", yard.getYardNumber());
+                yardInfo.put("usage", yardUsage);
+                yardInfo.put("xCoordinate", yard.getXCoordinate());
+                yardInfo.put("yCoordinate", yard.getYCoordinate());
+                yardInfo.put("toStockAllowed", yard.isToStockAllowed());
+                yardInfo.put("ingotCount", ingotCount);
+                yardInfo.put("maxIngots", yard.getMaxIngots());
+                yardInfo.put("available", isAvailable);
+                yards.add(yardInfo);
+            }
+        }
+        response.put("totalCount", totalCount);
+        response.put("availableCount", availableCount);
+        response.put("returnedCount", yards.size());
+        response.put("stockyards", yards);
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Gibt Details zu einem Stockyard zurueck (fuer Diagnose)
+     */
+    @GetMapping("/stockyard/{id}")
+    public ResponseEntity<Map<String, Object>> getStockyard(@PathVariable Long id) {
+        Map<String, Object> response = new HashMap<>();
+        response.put("timestamp", LocalDateTime.now().toString());
+
+        return stockyardRepository.findById(id)
+            .map(yard -> {
+                response.put("id", yard.getId());
+                response.put("yardNumber", yard.getYardNumber());
+                response.put("xCoordinate", yard.getXCoordinate());
+                response.put("yCoordinate", yard.getYCoordinate());
+                response.put("type", yard.getType() != null ? yard.getType().name() : null);
+                response.put("usage", yard.getUsage() != null ? yard.getUsage().name() : null);
+                response.put("xPosition", yard.getXPosition());
+                response.put("yPosition", yard.getYPosition());
+                response.put("zPosition", yard.getZPosition());
+                return ResponseEntity.ok(response);
+            })
+            .orElseGet(() -> {
+                response.put("error", "Stockyard not found: " + id);
+                return ResponseEntity.notFound().build();
+            });
     }
 
     /**

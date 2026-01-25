@@ -454,6 +454,12 @@ public class PlcService {
      * Sendet ein Kommando an die SPS oder den Simulator
      */
     public void sendCommand(PlcCommand command) throws PlcException {
+        log.info("=== PLC SERVICE sendCommand ===");
+        log.info("useSimulator={}, simulatorRunning={}", useSimulator, simulatorService.isRunning());
+        log.info("Command: PICKUP({},{},{}), RELEASE({},{},{})",
+            command.getPickupPositionX(), command.getPickupPositionY(), command.getPickupPositionZ(),
+            command.getReleasePositionX(), command.getReleasePositionY(), command.getReleasePositionZ());
+
         // Simulator-Modus: Kommando an Simulator senden
         if (useSimulator && simulatorService.isRunning()) {
             sendCommandToSimulator(command);

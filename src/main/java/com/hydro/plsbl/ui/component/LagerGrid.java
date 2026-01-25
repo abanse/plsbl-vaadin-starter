@@ -1335,6 +1335,7 @@ public class LagerGrid extends Div {
             if (longStockyard != null) {
                 StockyardDTO longYard = longStockyard.getStockyard();
                 int longX = longYard.getXCoordinate();
+                int longY = longYard.getYCoordinate();
 
                 // LONG-Lagerplatz deckt X und X-1 ab
                 // Mitte ist zwischen diesen beiden Spalten
@@ -1343,12 +1344,20 @@ public class LagerGrid extends Div {
                 // Mitte: Pixel für X + 39
                 int longCenterPixelX = PIXEL_X_17 + (17 - longX) * 78 + 39;  // +39 = halbe Spalte nach rechts
 
+                // Y-Position auch auf Zellenmitte korrigieren
+                // Zeilen-Pixel: PIXEL_Y_10 für Y=10, PIXEL_Y_01 für Y=1
+                // Jede Zeile: (PIXEL_Y_01 - PIXEL_Y_10) / 9 = ca. 41 Pixel
+                int pixelPerRow = (PIXEL_Y_01 - PIXEL_Y_10) / 9;
+                int longCenterPixelY = PIXEL_Y_10 + (10 - longY) * pixelPerRow;
+
                 log.info("LONG STOCKYARD KORREKTUR: {} deckt Position {}/{} ab",
                     longYard.getYardNumber(),
                     String.format("%02d", expectedXCoord), String.format("%02d", expectedYCoord));
-                log.info("Pixel angepasst: {} -> {} (Mitte von LONG)", pixelX, longCenterPixelX);
+                log.info("Pixel X angepasst: {} -> {} (Mitte von LONG)", pixelX, longCenterPixelX);
+                log.info("Pixel Y angepasst: {} -> {} (Zellenmitte Y={})", pixelY, longCenterPixelY, longY);
 
                 pixelX = longCenterPixelX;
+                pixelY = longCenterPixelY;
             }
             log.info("=========================");
         }

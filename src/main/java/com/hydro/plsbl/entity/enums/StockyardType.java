@@ -31,7 +31,7 @@ public enum StockyardType {
      * Wird dieser Typ in der Lager-Ansicht angezeigt?
      */
     public boolean isShownInStockView() {
-        return this == INTERNAL || this == EXTERNAL || this == LOADING || this == SAW;
+        return this == INTERNAL || this == EXTERNAL || this == LOADING || this == SAW || this == AUSGANG;
     }
     
     public static StockyardType fromCode(char code) {
