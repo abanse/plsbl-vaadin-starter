@@ -127,6 +127,23 @@ ABGESCHLOSSENE ARBEITEN:
       - Lücke zwischen Säge und Zaun (topFence4a erweitert auf Spalte 24)
       Datei: src/main/java/com/hydro/plsbl/ui/component/LagerGrid.java
 
+7. [NEU 25.01.2026] Vollständiges Oracle-Schema
+
+   a) schema-oracle.sql erstellt
+      - Alle 10 Tabellen für Oracle-Produktion
+      - Stammdaten: MD_APPSETTING, MD_STOCKYARD, MD_PRODUCT, MD_INGOTTYPE
+      - Bewegungsdaten: TD_STOCKYARDSTATUS, TD_INGOT, TD_CRANESTATUS,
+                        TD_PLSSTATUS, TD_TRANSPORTORDER, TD_CALLOFF
+      - Constraints (PK, FK, UK)
+      - Indizes für Performance
+      - Kommentare zu Tabellen und Spalten
+      - Initiale Daten (Barrentypen, Status-Einträge, Einstellungen)
+      Datei: src/main/resources/schema-oracle.sql
+
+   b) CLAUDE.md aktualisiert
+      - Vollständige Datenbank-Dokumentation
+      - Schema-Dateien referenziert
+
 FRÜHERE ARBEITEN:
 -----------------------------------------------------------------------------
 
@@ -136,48 +153,29 @@ FRÜHERE ARBEITEN:
 8. [ERLEDIGT] Transport-Nummer Format gekürzt (TA26-0001)
 9. [ERLEDIGT] Kran-Visualisierung korrigiert (LONG-Lagerplätze)
 
-ORACLE-MIGRATION für Barrentypen:
+ORACLE-SCHEMA:
 -----------------------------------------------------------------------------
 
-```sql
--- In Oracle ausführen:
-CREATE TABLE MD_INGOTTYPE (
-    ID NUMBER(19) NOT NULL,
-    SERIAL NUMBER(19) DEFAULT 1,
-    TABLESERIAL NUMBER(19) DEFAULT 1,
-    NAME VARCHAR2(20) NOT NULL,
-    DESCRIPTION VARCHAR2(100),
-    LENGTH_TYPE CHAR(1),
-    INTERNAL_ALLOWED NUMBER(1) DEFAULT 1,
-    EXTERNAL_ALLOWED NUMBER(1) DEFAULT 1,
-    RETRIEVAL_ALLOWED NUMBER(1) DEFAULT 1,
-    AUTO_RETRIEVAL NUMBER(1) DEFAULT 0,
-    MIN_LENGTH NUMBER(10),
-    MAX_LENGTH NUMBER(10),
-    MIN_WIDTH NUMBER(10),
-    MAX_WIDTH NUMBER(10),
-    MIN_THICKNESS NUMBER(10),
-    MAX_THICKNESS NUMBER(10),
-    MIN_WEIGHT NUMBER(10),
-    MAX_WEIGHT NUMBER(10),
-    PRODUCT_REGEX VARCHAR2(200),
-    PRIORITY NUMBER(5) DEFAULT 0,
-    CONSTRAINT PK_INGOTTYPE PRIMARY KEY (ID),
-    CONSTRAINT UK_INGOTTYPE_NAME UNIQUE (NAME)
-);
+Vollständiges Oracle-Schema in: src/main/resources/schema-oracle.sql
 
--- Initiale Daten
-INSERT INTO MD_INGOTTYPE (ID, NAME, DESCRIPTION, LENGTH_TYPE, INTERNAL_ALLOWED, EXTERNAL_ALLOWED, RETRIEVAL_ALLOWED, AUTO_RETRIEVAL, MIN_LENGTH, MAX_LENGTH, MAX_WEIGHT, PRIORITY)
-VALUES (1, 'KURZ', 'normale kurze Barren', 'S', 1, 1, 1, 0, 3500, 4300, NULL, 0);
+Tabellen (10):
+  Stammdaten (MD_*):
+    - MD_APPSETTING      Anwendungseinstellungen
+    - MD_STOCKYARD       Lagerplätze
+    - MD_PRODUCT         Produkte/Artikel
+    - MD_INGOTTYPE       Barrentypen (KURZ, MITTEL, LANG)
 
-INSERT INTO MD_INGOTTYPE (ID, NAME, DESCRIPTION, LENGTH_TYPE, INTERNAL_ALLOWED, EXTERNAL_ALLOWED, RETRIEVAL_ALLOWED, AUTO_RETRIEVAL, MIN_LENGTH, MAX_LENGTH, MAX_WEIGHT, PRIORITY)
-VALUES (2, 'LANG', 'normale lange Barren', 'L', 1, 1, 0, 0, 7500, 8700, NULL, 0);
+  Bewegungsdaten (TD_*):
+    - TD_STOCKYARDSTATUS Lagerplatz-Status
+    - TD_INGOT           Barren
+    - TD_CRANESTATUS     Kran-Status (1 Eintrag)
+    - TD_PLSSTATUS       Säge-Status (1 Eintrag)
+    - TD_TRANSPORTORDER  Transportaufträge
+    - TD_CALLOFF         Abrufe/Kundenbestellungen
 
-INSERT INTO MD_INGOTTYPE (ID, NAME, DESCRIPTION, LENGTH_TYPE, INTERNAL_ALLOWED, EXTERNAL_ALLOWED, RETRIEVAL_ALLOWED, AUTO_RETRIEVAL, MIN_LENGTH, MAX_LENGTH, MAX_WEIGHT, PRIORITY)
-VALUES (3, 'MITTEL', 'mittellange Barren', 'M', 0, 1, 1, 1, 4300, 7400, 18000, 0);
-
-COMMIT;
-```
+Migration:
+  - Neues System: Vollständiges Script ausführen (schema-oracle.sql)
+  - Bestehendes System: Nur MD_INGOTTYPE hinzufügen (schema-ingottype.sql)
 
 ZUGRIFF auf neue Funktionen:
 -----------------------------------------------------------------------------
