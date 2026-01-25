@@ -4,8 +4,10 @@ import com.hydro.plsbl.dto.TransportOrderDTO;
 import com.hydro.plsbl.entity.masterdata.Stockyard;
 import com.hydro.plsbl.kafka.dto.KafkaPickupOrderMessage;
 import com.hydro.plsbl.repository.StockyardRepository;
+import com.hydro.plsbl.dto.SawStatusDTO;
 import com.hydro.plsbl.service.IngotService;
 import com.hydro.plsbl.service.IngotStorageService;
+import com.hydro.plsbl.service.SawStatusService;
 import com.hydro.plsbl.service.TransportOrderProcessor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -38,16 +40,19 @@ public class StorageTestController {
     private final TransportOrderProcessor orderProcessor;
     private final StockyardRepository stockyardRepository;
     private final IngotService ingotService;
+    private final SawStatusService sawStatusService;
     private final AtomicLong testCounter = new AtomicLong(System.currentTimeMillis());
 
     public StorageTestController(IngotStorageService ingotStorageService,
                                   TransportOrderProcessor orderProcessor,
                                   StockyardRepository stockyardRepository,
-                                  IngotService ingotService) {
+                                  IngotService ingotService,
+                                  SawStatusService sawStatusService) {
         this.ingotStorageService = ingotStorageService;
         this.orderProcessor = orderProcessor;
         this.stockyardRepository = stockyardRepository;
         this.ingotService = ingotService;
+        this.sawStatusService = sawStatusService;
     }
 
     /**
@@ -381,6 +386,25 @@ public class StorageTestController {
                 response.put("error", "Stockyard not found: " + id);
                 return ResponseEntity.notFound().build();
             });
+    }
+
+
+    /**
+     * Gibt den aktuellen Säge-Status zurück (für Debugging)
+     */
+    @GetMapping("/saw/status")
+    public ResponseEntity<Map<String, Object>> getSawStatus() {
+        Map<String, Object> response = new HashMap<>();
+        response.put("timestamp", LocalDateTime.now().toString());
+
+        sawStatusService.getCurrentStatus().ifPresent(status -> {
+            response.put("hasError", status.hasError());
+            response.put("errorType", status.getErrorType());
+            response.put("errorMessage", status.getErrorMessage());
+            response.put("pickupMode", status.getPickupMode() != null ? status.getPickupMode().name() : null);
+        });
+
+        return ResponseEntity.ok(response);
     }
 
     /**

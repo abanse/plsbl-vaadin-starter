@@ -59,6 +59,8 @@ public class IngotStorageService {
     private final ProductRepository productRepository;
     private final StockyardRepository stockyardRepository;
     private final StockyardStatusRepository stockyardStatusRepository;
+    private final SawStatusService sawStatusService;
+    private final ErrorBroadcaster errorBroadcaster;
     private final JdbcTemplate jdbcTemplate;
 
     public IngotStorageService(
@@ -70,6 +72,8 @@ public class IngotStorageService {
             ProductRepository productRepository,
             StockyardRepository stockyardRepository,
             StockyardStatusRepository stockyardStatusRepository,
+            SawStatusService sawStatusService,
+            ErrorBroadcaster errorBroadcaster,
             JdbcTemplate jdbcTemplate) {
         this.kafkaConsumerService = kafkaConsumerService;
         this.kafkaProducerService = kafkaProducerService;
@@ -79,6 +83,8 @@ public class IngotStorageService {
         this.productRepository = productRepository;
         this.stockyardRepository = stockyardRepository;
         this.stockyardStatusRepository = stockyardStatusRepository;
+        this.sawStatusService = sawStatusService;
+        this.errorBroadcaster = errorBroadcaster;
         this.jdbcTemplate = jdbcTemplate;
     }
 
@@ -98,6 +104,9 @@ public class IngotStorageService {
             message.getIngotNumber(), message.getProductNumber());
 
         try {
+            // 0. Prüfen ob Barren bereits im Lager vorhanden ist
+            checkIngotNotInStock(message.getIngotNumber());
+
             // 1. Produkt finden oder erstellen
             Long productId = findOrCreateProduct(message.getProductNumber());
             log.debug("Produkt gefunden/erstellt: ID={}", productId);
@@ -121,11 +130,16 @@ public class IngotStorageService {
             log.info("Transport-Auftrag erstellt: {} von {} nach {}",
                 order.getTransportNo(), sawPosition.getYardNumber(), targetYard.getYardNumber());
 
-            // 6. Rueckmeldung an Saege senden
+            // 6. Fehler im Säge-Status löschen (Einlagerung erfolgreich)
+            sawStatusService.clearError();
+
+            // 7. Rueckmeldung an Saege senden
             sendSuccessFeedback(message.getIngotNumber(), targetYard.getYardNumber(), order.getTransportNo());
 
         } catch (Exception e) {
             log.error("Fehler bei Einlagerung: {}", e.getMessage(), e);
+            // Fehler im Säge-Status setzen (falls noch nicht durch checkIngotNotInStock gesetzt)
+            sawStatusService.setError("FEHLER", e.getMessage());
             sendErrorFeedback(message.getIngotNumber(), e.getMessage());
             throw e;
         }
@@ -154,6 +168,9 @@ public class IngotStorageService {
         log.info("  Breite: {} mm", width);
         log.info("  Höhe: {} mm", height);
         log.info("========================================");
+
+        // 0. Prüfen ob Barren bereits im Lager vorhanden ist
+        checkIngotNotInStock(ingotNumber);
 
         // Kafka-Message erstellen
         KafkaPickupOrderMessage message = new KafkaPickupOrderMessage();
@@ -196,6 +213,9 @@ public class IngotStorageService {
         // 5. Transport-Auftrag erstellen
         TransportOrderDTO order = createTransportOrder(ingot, sawPosition.getId(), targetYard.getId());
 
+        // 6. Fehler im Säge-Status löschen (Einlagerung erfolgreich)
+        sawStatusService.clearError();
+
         log.info("========================================");
         log.info("EINLAGERUNG ABGESCHLOSSEN");
         log.info("  Barren: {} (ID={})", ingot.getIngotNo(), ingot.getId());
@@ -204,6 +224,55 @@ public class IngotStorageService {
         log.info("========================================");
 
         return order;
+    }
+
+    /**
+     * Prüft ob ein Barren mit der gleichen Nummer bereits im Lager vorhanden ist.
+     * Wirft eine Exception wenn der Barren bereits existiert und noch im Bestand ist.
+     *
+     * @param ingotNumber Die Barrennummer
+     * @throws IllegalStateException wenn der Barren bereits im Lager ist
+     */
+    private void checkIngotNotInStock(String ingotNumber) {
+        if (ingotNumber == null || ingotNumber.isBlank()) {
+            return;
+        }
+
+        // Barren mit gleicher Nummer suchen
+        Optional<IngotDTO> existingIngot = ingotService.findByIngotNo(ingotNumber);
+
+        if (existingIngot.isPresent()) {
+            IngotDTO ingot = existingIngot.get();
+
+            // Prüfen ob noch im Bestand (stockyardId != null)
+            if (ingot.getStockyardId() != null) {
+                // Lagerplatz-Nummer ermitteln für bessere Fehlermeldung
+                String yardNumber = "unbekannt";
+                try {
+                    Optional<Stockyard> yard = stockyardRepository.findById(ingot.getStockyardId());
+                    if (yard.isPresent()) {
+                        yardNumber = yard.get().getYardNumber();
+                    }
+                } catch (Exception e) {
+                    log.warn("Konnte Lagerplatz nicht ermitteln: {}", e.getMessage());
+                }
+
+                String errorMsg = String.format(
+                    "Barren %s ist bereits im Lager vorhanden (Lagerplatz: %s). " +
+                    "Einlagerung nicht möglich!",
+                    ingotNumber, yardNumber);
+
+                log.error(errorMsg);
+
+                // Fehler über Broadcaster senden (wird in der UI als Notification angezeigt)
+                errorBroadcaster.broadcast("DUPLIKAT", errorMsg);
+
+                throw new IllegalStateException(errorMsg);
+            }
+
+            // Barren existiert, ist aber nicht mehr im Bestand (geliefert/ausgelagert)
+            log.info("Barren {} existiert, ist aber nicht mehr im Bestand - Neuanlage möglich", ingotNumber);
+        }
     }
 
     /**

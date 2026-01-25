@@ -8,6 +8,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Optional;
@@ -65,6 +66,36 @@ public class SawStatusService {
             status.setRotate(rotate);
             plsStatusRepository.save(status);
             log.info("Rotate updated to: {}", rotate);
+        });
+    }
+
+    /**
+     * Setzt eine Fehlermeldung im Säge-Status
+     * Verwendet REQUIRES_NEW damit der Fehler auch bei Rollback der Haupt-Transaktion gespeichert wird.
+     *
+     * @param errorType Fehlertyp (z.B. "DUPLIKAT", "LAGERPLATZ")
+     * @param errorMessage Die Fehlermeldung
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void setError(String errorType, String errorMessage) {
+        plsStatusRepository.findCurrent().ifPresent(status -> {
+            status.setErrorType(errorType);
+            status.setErrorMessage(errorMessage);
+            plsStatusRepository.save(status);
+            log.warn("Saw error set: {} - {}", errorType, errorMessage);
+        });
+    }
+
+    /**
+     * Löscht die Fehlermeldung im Säge-Status
+     */
+    @Transactional
+    public void clearError() {
+        plsStatusRepository.findCurrent().ifPresent(status -> {
+            status.setErrorType(null);
+            status.setErrorMessage(null);
+            plsStatusRepository.save(status);
+            log.info("Saw error cleared");
         });
     }
 

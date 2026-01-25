@@ -122,6 +122,9 @@ public class SawView extends VerticalLayout {
     private IngotDTO currentIngot;
     private boolean editMode = false;
 
+    // Fehler-Tracking (um wiederholte Notifications zu vermeiden)
+    private String lastShownError = null;
+
     // Polling
     private ScheduledExecutorService updateExecutor;
     private ScheduledFuture<?> updateFuture;
@@ -712,7 +715,7 @@ public class SawView extends VerticalLayout {
         recycleConfirmedCheckbox.setValue(status.isRecycleConfirmed());
         sawnConfirmedCheckbox.setValue(status.isSawnConfirmed());
 
-        // Fehler-Stil
+        // Fehler-Stil (Notification wird jetzt über ErrorBroadcaster angezeigt)
         if (status.hasError()) {
             errorMessageArea.getStyle().set("color", "red");
         } else {
