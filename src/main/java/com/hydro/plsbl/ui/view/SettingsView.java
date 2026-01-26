@@ -1,13 +1,19 @@
 package com.hydro.plsbl.ui.view;
 
+import com.hydro.plsbl.service.IngotService;
 import com.hydro.plsbl.service.IngotTypeService;
+import com.hydro.plsbl.service.LieferscheinPdfService;
 import com.hydro.plsbl.service.ProductService;
 import com.hydro.plsbl.service.SettingsService;
+import com.hydro.plsbl.service.ShipmentService;
+import com.hydro.plsbl.service.StockyardService;
 import com.hydro.plsbl.simulator.CraneSimulatorConfig;
 import com.hydro.plsbl.simulator.CraneSimulatorService;
 import com.hydro.plsbl.ui.MainLayout;
 import com.hydro.plsbl.ui.dialog.IngotTypeDialog;
+import com.hydro.plsbl.ui.dialog.LieferscheinDialog;
 import com.hydro.plsbl.ui.dialog.ProductDialog;
+import com.hydro.plsbl.ui.dialog.StockyardManagementDialog;
 import com.vaadin.flow.component.button.Button;
 import com.vaadin.flow.component.button.ButtonVariant;
 import com.vaadin.flow.component.formlayout.FormLayout;
@@ -45,6 +51,10 @@ public class SettingsView extends VerticalLayout {
     private final CraneSimulatorService simulatorService;
     private final ProductService productService;
     private final IngotTypeService ingotTypeService;
+    private final StockyardService stockyardService;
+    private final ShipmentService shipmentService;
+    private final IngotService ingotService;
+    private final LieferscheinPdfService pdfService;
 
     // Tabs
     private VerticalLayout sawContent;
@@ -142,12 +152,20 @@ public class SettingsView extends VerticalLayout {
                         CraneSimulatorConfig simulatorConfig,
                         CraneSimulatorService simulatorService,
                         ProductService productService,
-                        IngotTypeService ingotTypeService) {
+                        IngotTypeService ingotTypeService,
+                        StockyardService stockyardService,
+                        ShipmentService shipmentService,
+                        IngotService ingotService,
+                        LieferscheinPdfService pdfService) {
         this.settingsService = settingsService;
         this.simulatorConfig = simulatorConfig;
         this.simulatorService = simulatorService;
         this.productService = productService;
         this.ingotTypeService = ingotTypeService;
+        this.stockyardService = stockyardService;
+        this.shipmentService = shipmentService;
+        this.ingotService = ingotService;
+        this.pdfService = pdfService;
 
         setSizeFull();
         setPadding(true);
@@ -1127,8 +1145,46 @@ public class SettingsView extends VerticalLayout {
 
         layout.add(new Hr());
 
+        // Lagerplätze
+        Span section3 = new Span("Lagerplätze");
+        section3.getStyle().set("font-weight", "bold").set("font-size", "16px");
+        layout.add(section3);
+
+        Span stockyardInfo = new Span("Verwalten Sie alle Lagerplätze (Intern, Extern, SWAPOUT, Verladung). Filtern Sie nach Typ und bearbeiten Sie Koordinaten und Berechtigungen.");
+        stockyardInfo.getStyle().set("color", "gray");
+        layout.add(stockyardInfo);
+
+        Button stockyardButton = new Button("Lagerplätze verwalten", VaadinIcon.STORAGE.create());
+        stockyardButton.addThemeVariants(ButtonVariant.LUMO_PRIMARY);
+        stockyardButton.addClickListener(e -> {
+            StockyardManagementDialog dialog = new StockyardManagementDialog(stockyardService);
+            dialog.open();
+        });
+        layout.add(stockyardButton);
+
+        layout.add(new Hr());
+
+        // Lieferscheine
+        Span section4 = new Span("Lieferscheine");
+        section4.getStyle().set("font-weight", "bold").set("font-size", "16px");
+        layout.add(section4);
+
+        Span shipmentInfo = new Span("Verwalten Sie Lieferscheine für ausgelieferte Barren von externen Lagerplätzen.");
+        shipmentInfo.getStyle().set("color", "gray");
+        layout.add(shipmentInfo);
+
+        Button shipmentButton = new Button("Lieferscheine verwalten", VaadinIcon.CLIPBOARD_TEXT.create());
+        shipmentButton.addThemeVariants(ButtonVariant.LUMO_PRIMARY);
+        shipmentButton.addClickListener(e -> {
+            LieferscheinDialog dialog = new LieferscheinDialog(shipmentService, ingotService, stockyardService, pdfService);
+            dialog.open();
+        });
+        layout.add(shipmentButton);
+
+        layout.add(new Hr());
+
         // Hinweis
-        Span hint = new Span("Weitere Stammdaten (Lagerplätze, etc.) können in den jeweiligen Views bearbeitet werden.");
+        Span hint = new Span("Änderungen an Lagerplätzen werden sofort wirksam.");
         hint.getStyle().set("color", "gray").set("font-style", "italic");
         layout.add(hint);
 

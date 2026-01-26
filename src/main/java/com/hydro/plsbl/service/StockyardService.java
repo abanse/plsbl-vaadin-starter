@@ -182,6 +182,33 @@ public class StockyardService {
     }
 
     /**
+     * Lädt alle Lagerplätze (für Verwaltungsdialog)
+     */
+    public List<Stockyard> findAll() {
+        log.debug("Loading all stockyards");
+        List<Stockyard> stockyards = (List<Stockyard>) stockyardRepository.findAll();
+        log.debug("Found {} stockyards total", stockyards.size());
+        return stockyards;
+    }
+
+    /**
+     * Speichert einen Lagerplatz (Entity direkt)
+     */
+    @Transactional
+    public Stockyard save(Stockyard entity) {
+        log.debug("Saving stockyard entity: {}", entity.getYardNumber());
+
+        if (entity.getId() != null) {
+            // Update - markiere als nicht neu
+            entity.markNotNew();
+        }
+
+        Stockyard saved = stockyardRepository.save(entity);
+        log.info("Stockyard saved: {} (ID: {})", saved.getYardNumber(), saved.getId());
+        return saved;
+    }
+
+    /**
      * Löscht einen Lagerplatz
      * @throws IllegalStateException wenn noch Barren auf dem Lagerplatz sind
      */
@@ -635,7 +662,64 @@ public class StockyardService {
         log.info("######################################################");
         return result;
     }
-    
+
+    /**
+     * Findet verfügbare Ziel-Lagerplätze INKL. externe Plätze (für manuelle Umbuchung ohne Kran)
+     * Wird verwendet wenn Stapler Barren von SWAPOUT zu externen Plätzen transportiert hat.
+     */
+    public List<StockyardDTO> findAvailableDestinationsIncludingExternal() {
+        log.info("### findAvailableDestinationsIncludingExternal - INKL. EXTERNE PLÄTZE ###");
+
+        List<Stockyard> stockyards = stockyardRepository.findAvailableDestinationsIncludingExternal();
+        log.info("Gefundene Lagerplaetze aus DB (inkl. extern): {}", stockyards.size());
+
+        // IDs sammeln für Status-Abfrage
+        List<Long> stockyardIds = stockyards.stream()
+            .map(Stockyard::getId)
+            .collect(Collectors.toList());
+
+        // Status laden (für UI-Anzeige)
+        Map<Long, StockyardStatus> statusMap = statusRepository.findByStockyardIdIn(stockyardIds)
+            .stream()
+            .collect(Collectors.toMap(StockyardStatus::getStockyardId, s -> s));
+
+        // Aktuelle Barren-Anzahl DIREKT aus TD_INGOT zählen
+        Map<Long, Integer> actualIngotCounts = countIngotsOnStockyards(stockyardIds);
+
+        // DTOs erstellen und nach verfügbarem Platz filtern
+        List<StockyardDTO> result = stockyards.stream()
+            .map(yard -> {
+                StockyardDTO dto = toDTO(yard);
+                StockyardStatus status = statusMap.get(yard.getId());
+
+                int actualCount = actualIngotCounts.getOrDefault(yard.getId(), 0);
+
+                if (status != null) {
+                    StockyardStatusDTO statusDTO = toStatusDTO(status, yard.getMaxIngots());
+                    statusDTO.setIngotsCount(actualCount);
+                    dto.setStatus(statusDTO);
+                } else if (actualCount > 0) {
+                    StockyardStatusDTO statusDTO = new StockyardStatusDTO();
+                    statusDTO.setIngotsCount(actualCount);
+                    dto.setStatus(statusDTO);
+                }
+
+                return dto;
+            })
+            .filter(dto -> {
+                if (!dto.isToStockAllowed()) {
+                    return false;
+                }
+                int currentCount = actualIngotCounts.getOrDefault(dto.getId(), 0);
+                int maxIngots = dto.getMaxIngots();
+                return currentCount < maxIngots;
+            })
+            .collect(Collectors.toList());
+
+        log.info("### ERGEBNIS (inkl. extern): {} verfuegbare Plaetze ###", result.size());
+        return result;
+    }
+
     // === Merge/Split Methoden ===
 
     /**

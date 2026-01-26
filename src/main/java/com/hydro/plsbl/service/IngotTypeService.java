@@ -184,10 +184,10 @@ public class IngotTypeService {
         Long newId = getNextId();
         jdbcTemplate.update(
             "INSERT INTO MD_INGOTTYPE (ID, SERIAL, TABLESERIAL, NAME, DESCRIPTION, LENGTH_TYPE, " +
-            "INTERNAL_ALLOWED, EXTERNAL_ALLOWED, RETRIEVAL_ALLOWED, AUTO_RETRIEVAL, " +
+            "INTERNAL_ALLOWED, EXTERNAL_ALLOWED, RETRIEVAL_ALLOWED, AUTO_RETRIEVAL, SAW_TO_SWAPOUT, " +
             "MIN_LENGTH, MAX_LENGTH, MIN_WIDTH, MAX_WIDTH, MIN_THICKNESS, MAX_THICKNESS, " +
             "MIN_WEIGHT, MAX_WEIGHT, PRODUCT_REGEX, PRIORITY) " +
-            "VALUES (?, 1, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (?, 1, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             newId,
             dto.getName(),
             dto.getDescription(),
@@ -196,6 +196,7 @@ public class IngotTypeService {
             boolToInt(dto.getExternalAllowed()),
             boolToInt(dto.getRetrievalAllowed()),
             boolToInt(dto.getAutoRetrieval()),
+            boolToInt(dto.getSawToSwapout()),
             dto.getMinLength(),
             dto.getMaxLength(),
             dto.getMinWidth(),
@@ -226,7 +227,7 @@ public class IngotTypeService {
         int updated = jdbcTemplate.update(
             "UPDATE MD_INGOTTYPE SET NAME = ?, DESCRIPTION = ?, LENGTH_TYPE = ?, " +
             "INTERNAL_ALLOWED = ?, EXTERNAL_ALLOWED = ?, RETRIEVAL_ALLOWED = ?, AUTO_RETRIEVAL = ?, " +
-            "MIN_LENGTH = ?, MAX_LENGTH = ?, MIN_WIDTH = ?, MAX_WIDTH = ?, " +
+            "SAW_TO_SWAPOUT = ?, MIN_LENGTH = ?, MAX_LENGTH = ?, MIN_WIDTH = ?, MAX_WIDTH = ?, " +
             "MIN_THICKNESS = ?, MAX_THICKNESS = ?, MIN_WEIGHT = ?, MAX_WEIGHT = ?, " +
             "PRODUCT_REGEX = ?, PRIORITY = ?, SERIAL = SERIAL + 1 WHERE ID = ?",
             dto.getName(),
@@ -236,6 +237,7 @@ public class IngotTypeService {
             boolToInt(dto.getExternalAllowed()),
             boolToInt(dto.getRetrievalAllowed()),
             boolToInt(dto.getAutoRetrieval()),
+            boolToInt(dto.getSawToSwapout()),
             dto.getMinLength(),
             dto.getMaxLength(),
             dto.getMinWidth(),
@@ -293,6 +295,7 @@ public class IngotTypeService {
         dto.setExternalAllowed(entity.getExternalAllowed());
         dto.setRetrievalAllowed(entity.getRetrievalAllowed());
         dto.setAutoRetrieval(entity.getAutoRetrieval());
+        dto.setSawToSwapout(entity.getSawToSwapout());
         dto.setMinLength(entity.getMinLength());
         dto.setMaxLength(entity.getMaxLength());
         dto.setMinWidth(entity.getMinWidth());

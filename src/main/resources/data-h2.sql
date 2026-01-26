@@ -25,10 +25,11 @@ INSERT INTO MD_PRODUCT (ID, SERIAL, PRODUCT_NO, DESCRIPTION, MAX_PER_LOCATION) V
 (5, 1, '6061-001', 'Strukturlegierung', 8);
 
 -- Barrentypen (basierend auf barrentypen.xls)
-INSERT INTO MD_INGOTTYPE (ID, SERIAL, NAME, DESCRIPTION, LENGTH_TYPE, INTERNAL_ALLOWED, EXTERNAL_ALLOWED, RETRIEVAL_ALLOWED, AUTO_RETRIEVAL, MIN_LENGTH, MAX_LENGTH, MIN_WEIGHT, MAX_WEIGHT, PRIORITY) VALUES
-(1, 1, 'KURZ', 'normale kurze Barren', 'S', TRUE, TRUE, TRUE, FALSE, 3500, 4300, NULL, NULL, 0),
-(2, 1, 'LANG', 'normale lange Barren', 'L', TRUE, TRUE, FALSE, FALSE, 7500, 8700, NULL, NULL, 0),
-(3, 1, 'MITTEL', 'mittellange Barren', 'M', FALSE, TRUE, TRUE, TRUE, 4300, 7400, NULL, 18000, 0);
+-- SAW_TO_SWAPOUT: TRUE = Barren wird von Säge auf Ausgang-Platz gelegt (für Stapler-Transport zu externen Plätzen)
+INSERT INTO MD_INGOTTYPE (ID, SERIAL, NAME, DESCRIPTION, LENGTH_TYPE, INTERNAL_ALLOWED, EXTERNAL_ALLOWED, RETRIEVAL_ALLOWED, AUTO_RETRIEVAL, SAW_TO_SWAPOUT, MIN_LENGTH, MAX_LENGTH, MIN_WEIGHT, MAX_WEIGHT, PRIORITY) VALUES
+(1, 1, 'KURZ', 'normale kurze Barren', 'S', TRUE, TRUE, TRUE, FALSE, FALSE, 3500, 4300, NULL, NULL, 0),
+(2, 1, 'LANG', 'normale lange Barren', 'L', TRUE, TRUE, FALSE, FALSE, FALSE, 7500, 8700, NULL, NULL, 0),
+(3, 1, 'MITTEL', 'mittellange Barren - Stapler zu externem Lager', 'M', FALSE, TRUE, TRUE, TRUE, TRUE, 4300, 7400, NULL, 18000, 0);
 
 -- Kran-Status (nur 1 Eintrag)
 INSERT INTO TD_CRANESTATUS (ID, SERIAL, X_POSITION, Y_POSITION, Z_POSITION, 
@@ -230,18 +231,19 @@ INSERT INTO MD_STOCKYARD (ID, SERIAL, YARD_NO, X_COORDINATE, Y_COORDINATE, YARD_
 (1105, 1, '16/01', 16, 1, 'I', 'S', 48000, 3000, 0, 1800, 1500, 0, 10, TRUE, TRUE),
 (1106, 1, '17/01', 17, 1, 'I', 'S', 51000, 3000, 0, 1800, 1500, 0, 10, TRUE, TRUE);
 
--- Schrott-Lagerplätze 00/01 bis 00/08 - für Schrott-Barren die per Stapler durch das Barren-Tor rausgefahren werden
--- X=0, Y=1-8, rechts neben der Säge (Spalte 23 im Grid)
--- BOTTOM_CENTER_X = -5500 (rechts von der Säge bei -2500, im visuellen Grid weiter rechts = physisch weiter links/negativ)
+-- Ausgang/Swapout-Lagerplätze 00/01 bis 00/08 - für Barren die per Stapler zu externen Plätzen gefahren werden
+-- Koordinaten aus Oracle-DB: X=9440 (neben Säge), Y=11530-30830
+-- YARD_TYPE='A' = Swapout/Ausgang (Stapler-Abholplatz)
+-- MAX_INGOTS=1 da nur 1 Barren auf Swapout-Platz (wie im Original)
 INSERT INTO MD_STOCKYARD (ID, SERIAL, YARD_NO, X_COORDINATE, Y_COORDINATE, YARD_TYPE, YARD_USAGE, BOTTOM_CENTER_X, BOTTOM_CENTER_Y, BOTTOM_CENTER_Z, LENGTH, WIDTH, HEIGHT, MAX_INGOTS, TO_STOCK_ALLOWED, FROM_STOCK_ALLOWED) VALUES
-(11, 1, '00/01', 0, 1, 'I', 'R', -5500, 3000, 0, 2000, 1500, 0, 8, TRUE, TRUE),
-(12, 1, '00/02', 0, 2, 'I', 'R', -5500, 6000, 0, 2000, 1500, 0, 8, TRUE, TRUE),
-(13, 1, '00/03', 0, 3, 'I', 'R', -5500, 9000, 0, 2000, 1500, 0, 8, TRUE, TRUE),
-(14, 1, '00/04', 0, 4, 'I', 'R', -5500, 12000, 0, 2000, 1500, 0, 8, TRUE, TRUE),
-(15, 1, '00/05', 0, 5, 'I', 'R', -5500, 15000, 0, 2000, 1500, 0, 8, TRUE, TRUE),
-(16, 1, '00/06', 0, 6, 'I', 'R', -5500, 18000, 0, 2000, 1500, 0, 8, TRUE, TRUE),
-(17, 1, '00/07', 0, 7, 'I', 'R', -5500, 21000, 0, 2000, 1500, 0, 8, TRUE, TRUE),
-(18, 1, '00/08', 0, 8, 'I', 'R', -5500, 24000, 0, 2000, 1500, 0, 8, TRUE, TRUE);
+(11, 1, '00/01', 0, 1, 'A', 'A', 9440, 11530, 0, 2000, 1500, 0, 1, TRUE, TRUE),
+(12, 1, '00/02', 0, 2, 'A', 'A', 9440, 14330, 0, 2000, 1500, 0, 1, TRUE, TRUE),
+(13, 1, '00/03', 0, 3, 'A', 'A', 9440, 17130, 0, 2000, 1500, 0, 1, TRUE, TRUE),
+(14, 1, '00/04', 0, 4, 'A', 'A', 9440, 19930, 0, 2000, 1500, 0, 1, TRUE, TRUE),
+(15, 1, '00/05', 0, 5, 'A', 'A', 9440, 22730, 0, 2000, 1500, 0, 1, TRUE, TRUE),
+(16, 1, '00/06', 0, 6, 'A', 'A', 9440, 25530, 0, 2000, 1500, 0, 1, TRUE, TRUE),
+(17, 1, '00/07', 0, 7, 'A', 'A', 9440, 28330, 0, 2000, 1500, 0, 1, TRUE, TRUE),
+(18, 1, '00/08', 0, 8, 'A', 'A', 9440, 30830, 0, 2000, 1500, 0, 1, TRUE, TRUE);
 
 -- Säge-Position - oben rechts, an der Zaun-Öffnung
 -- BOTTOM_CENTER_X: -2500 (Mitte zwischen -5000 und 0)

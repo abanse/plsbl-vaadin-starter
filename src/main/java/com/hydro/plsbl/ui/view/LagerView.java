@@ -11,7 +11,9 @@ import com.hydro.plsbl.service.CraneStatusService;
 import com.hydro.plsbl.service.DataBroadcaster;
 import com.hydro.plsbl.service.DataBroadcaster.DataEventType;
 import com.hydro.plsbl.service.IngotService;
+import com.hydro.plsbl.service.LieferscheinPdfService;
 import com.hydro.plsbl.service.SettingsService;
+import com.hydro.plsbl.service.ShipmentService;
 import com.hydro.plsbl.service.StockyardService;
 import com.hydro.plsbl.service.TransportOrderService;
 import com.hydro.plsbl.simulator.CraneSimulatorCommand;
@@ -82,6 +84,8 @@ public class LagerView extends VerticalLayout {
     private final BeladungBroadcaster beladungBroadcaster;
     private final TransportOrderService transportOrderService;
     private final DataBroadcaster dataBroadcaster;
+    private final ShipmentService shipmentService;
+    private final LieferscheinPdfService pdfService;
     private Registration broadcasterRegistration;
     private Registration dataBroadcasterRegistration;
     private LagerGrid lagerGrid;
@@ -111,7 +115,8 @@ public class LagerView extends VerticalLayout {
                      CraneStatusService craneStatusService, CraneSimulatorService simulatorService,
                      SettingsService settingsService, PlcService plcService,
                      BeladungStateService beladungStateService, BeladungBroadcaster beladungBroadcaster,
-                     TransportOrderService transportOrderService, DataBroadcaster dataBroadcaster) {
+                     TransportOrderService transportOrderService, DataBroadcaster dataBroadcaster,
+                     ShipmentService shipmentService, LieferscheinPdfService pdfService) {
         this.stockyardService = stockyardService;
         this.ingotService = ingotService;
         this.craneStatusService = craneStatusService;
@@ -122,6 +127,8 @@ public class LagerView extends VerticalLayout {
         this.beladungBroadcaster = beladungBroadcaster;
         this.transportOrderService = transportOrderService;
         this.dataBroadcaster = dataBroadcaster;
+        this.shipmentService = shipmentService;
+        this.pdfService = pdfService;
 
         setSizeFull();
         setPadding(true);
@@ -731,8 +738,8 @@ public class LagerView extends VerticalLayout {
             return;
         }
 
-        // Info-Dialog öffnen mit allen Services
-        StockyardInfoDialog dialog = new StockyardInfoDialog(stockyard, ingotService, stockyardService, plcService, transportOrderService);
+        // Info-Dialog öffnen mit allen Services (inkl. Lieferschein für "Liefern ohne Kran")
+        StockyardInfoDialog dialog = new StockyardInfoDialog(stockyard, ingotService, stockyardService, plcService, transportOrderService, shipmentService, pdfService);
         dialog.setOnEdit(this::openEditDialog);
         dialog.setOnIngotEdit(this::openIngotEditDialog);
         dialog.setOnRelocated(v -> loadData()); // Nach Umlagern Grid aktualisieren

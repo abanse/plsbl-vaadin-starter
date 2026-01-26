@@ -75,6 +75,96 @@ public class IngotService {
     }
 
     /**
+     * Findet verfügbare Barren für einen Abruf (Lieferung)
+     * - Barren mit passendem Produkt
+     * - Auf Lager (STOCKYARD_ID != null)
+     * - Nicht Schrott
+     * - Freigegeben (RELEASED_SINCE IS NOT NULL)
+     * - Nicht mit Korrektur (REVISED = 0 oder NULL)
+     */
+    public List<IngotDTO> findAvailableForDelivery(Long productId) {
+        log.info("Finding available ingots for delivery, productId={}", productId);
+
+        // Diagnose: Prüfe was rausgefiltert wird
+        try {
+            Integer total = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM TD_INGOT WHERE PRODUCT_ID = ? AND STOCKYARD_ID IS NOT NULL",
+                Integer.class, productId);
+            Integer notScrap = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM TD_INGOT WHERE PRODUCT_ID = ? AND STOCKYARD_ID IS NOT NULL AND (SCRAP IS NULL OR SCRAP = 0)",
+                Integer.class, productId);
+            Integer released = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM TD_INGOT WHERE PRODUCT_ID = ? AND STOCKYARD_ID IS NOT NULL AND RELEASED_SINCE IS NOT NULL",
+                Integer.class, productId);
+            Integer notRevised = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM TD_INGOT WHERE PRODUCT_ID = ? AND STOCKYARD_ID IS NOT NULL AND (REVISED IS NULL OR REVISED = 0)",
+                Integer.class, productId);
+            log.info("Diagnose für PRODUCT_ID={}: Gesamt={}, NichtSchrott={}, Freigegeben={}, NichtKorrigiert={}",
+                productId, total, notScrap, released, notRevised);
+        } catch (Exception e) {
+            log.warn("Diagnose fehlgeschlagen: {}", e.getMessage());
+        }
+
+        // Erst ohne die strengen Filter um zu sehen ob es überhaupt Daten gibt
+        String sql = """
+            SELECT i.*, s.YARD_NO as STOCKYARD_NO, p.PRODUCT_NO
+            FROM TD_INGOT i
+            LEFT JOIN MD_STOCKYARD s ON i.STOCKYARD_ID = s.ID
+            LEFT JOIN MD_PRODUCT p ON i.PRODUCT_ID = p.ID
+            WHERE i.PRODUCT_ID = ?
+              AND i.STOCKYARD_ID IS NOT NULL
+              AND (i.SCRAP IS NULL OR i.SCRAP = 0)
+            ORDER BY s.YARD_NO, i.PILE_POSITION DESC
+            """;
+        // Filter für Freigabe und Korrektur werden im Java-Code geprüft und geloggt
+
+        List<IngotDTO> allIngots = jdbcTemplate.query(sql, (rs, rowNum) -> {
+            IngotDTO dto = new IngotDTO();
+            dto.setId(rs.getLong("ID"));
+            dto.setIngotNo(rs.getString("INGOT_NO"));
+            dto.setProductId(rs.getObject("PRODUCT_ID") != null ? rs.getLong("PRODUCT_ID") : null);
+            dto.setProductSuffix(rs.getString("PRODUCT_SUFFIX"));
+            dto.setStockyardId(rs.getObject("STOCKYARD_ID") != null ? rs.getLong("STOCKYARD_ID") : null);
+            dto.setPilePosition(rs.getObject("PILE_POSITION") != null ? rs.getInt("PILE_POSITION") : null);
+            dto.setWeight(rs.getObject("WEIGHT") != null ? rs.getInt("WEIGHT") : null);
+            dto.setLength(rs.getObject("LENGTH") != null ? rs.getInt("LENGTH") : null);
+            dto.setWidth(rs.getObject("WIDTH") != null ? rs.getInt("WIDTH") : null);
+            dto.setThickness(rs.getObject("THICKNESS") != null ? rs.getInt("THICKNESS") : null);
+            dto.setStockyardNo(rs.getString("STOCKYARD_NO"));
+            dto.setProductNo(rs.getString("PRODUCT_NO"));
+
+            Integer scrapInt = rs.getObject("SCRAP", Integer.class);
+            dto.setScrap(scrapInt != null && scrapInt == 1);
+
+            Integer revisedInt = rs.getObject("REVISED", Integer.class);
+            dto.setRevised(revisedInt != null && revisedInt == 1);
+
+            if (rs.getTimestamp("RELEASED_SINCE") != null) {
+                dto.setReleasedSince(rs.getTimestamp("RELEASED_SINCE").toLocalDateTime());
+            }
+
+            return dto;
+        }, productId);
+
+        log.info("Abfrage für PRODUCT_ID={}: {} Barren gefunden (vor Filter)", productId, allIngots.size());
+
+        // Filtern: Nur nicht-korrigierte Barren (RELEASED_SINCE Filter entfernt)
+        List<IngotDTO> filtered = allIngots.stream()
+            .filter(dto -> {
+                boolean revised = dto.getRevised() != null && dto.getRevised();
+                if (revised) {
+                    log.debug("Barren {} rausgefiltert: korrigiert", dto.getIngotNo());
+                }
+                return !revised;
+            })
+            .collect(java.util.stream.Collectors.toList());
+
+        log.info("Nach Filter: {} Barren verfügbar (nicht korrigiert)", filtered.size());
+
+        return filtered;
+    }
+
+    /**
      * Findet den obersten Barren auf einem Lagerplatz
      */
     public Optional<IngotDTO> findTopIngotOnStockyard(Long stockyardId) {
@@ -107,6 +197,48 @@ public class IngotService {
         return ingotRepository.findAllOrdered().stream()
             .map(this::toDTO)
             .collect(Collectors.toList());
+    }
+
+    /**
+     * Findet alle Barren die im Lager sind (haben einen Lagerplatz)
+     * Für Beladungs-Tests wenn kein spezifisches Produkt zugeordnet ist
+     */
+    public List<IngotDTO> findAllInStock() {
+        log.info("Loading all ingots in stock (regardless of product)");
+
+        String sql = """
+            SELECT i.*, s.YARD_NO as STOCKYARD_NO, p.PRODUCT_NO as PRODUCT_NUMBER
+            FROM TD_INGOT i
+            LEFT JOIN MD_STOCKYARD s ON i.STOCKYARD_ID = s.ID
+            LEFT JOIN MD_PRODUCT p ON i.PRODUCT_ID = p.ID
+            WHERE i.STOCKYARD_ID IS NOT NULL
+              AND (i.SCRAP IS NULL OR i.SCRAP = 0)
+              AND i.RELEASED_SINCE IS NULL
+            ORDER BY s.YARD_NO, i.PILE_POSITION DESC
+            """;
+
+        List<IngotDTO> result = jdbcTemplate.query(sql, (rs, rowNum) -> {
+            IngotDTO dto = new IngotDTO();
+            dto.setId(rs.getLong("ID"));
+            dto.setIngotNo(rs.getString("INGOT_NO"));
+            dto.setProductId(rs.getObject("PRODUCT_ID") != null ? rs.getLong("PRODUCT_ID") : null);
+            dto.setProductNo(rs.getString("PRODUCT_NUMBER"));
+            dto.setStockyardId(rs.getObject("STOCKYARD_ID") != null ? rs.getLong("STOCKYARD_ID") : null);
+            dto.setStockyardNo(rs.getString("STOCKYARD_NO"));
+            dto.setPilePosition(rs.getObject("PILE_POSITION") != null ? rs.getInt("PILE_POSITION") : null);
+            dto.setWeight(rs.getObject("WEIGHT") != null ? rs.getInt("WEIGHT") : null);
+            dto.setLength(rs.getObject("LENGTH") != null ? rs.getInt("LENGTH") : null);
+            dto.setWidth(rs.getObject("WIDTH") != null ? rs.getInt("WIDTH") : null);
+            dto.setThickness(rs.getObject("THICKNESS") != null ? rs.getInt("THICKNESS") : null);
+            dto.setHeadSawn(rs.getObject("HEAD_SAWN") != null ? rs.getBoolean("HEAD_SAWN") : null);
+            dto.setFootSawn(rs.getObject("FOOT_SAWN") != null ? rs.getBoolean("FOOT_SAWN") : null);
+            dto.setScrap(rs.getObject("SCRAP") != null ? rs.getBoolean("SCRAP") : null);
+            dto.setRevised(rs.getObject("REVISED") != null ? rs.getBoolean("REVISED") : null);
+            return dto;
+        });
+
+        log.info("Found {} ingots in stock", result.size());
+        return result;
     }
 
     /**
@@ -571,5 +703,74 @@ public class IngotService {
         }
 
         return dto;
+    }
+
+    /**
+     * Erstellt Test-Barren für die Beladungs-Simulation
+     * @return Anzahl der erstellten Barren
+     */
+    @Transactional
+    public int createTestIngots() {
+        log.info("=== Erstelle Test-Barren ===");
+
+        try {
+            // Prüfen ob bereits Barren im Lager sind
+            int existing = findAllInStock().size();
+            if (existing >= 10) {
+                log.info("Bereits {} Barren im Lager, keine neuen erstellt", existing);
+                return existing;
+            }
+
+            // Verfügbare Lagerplätze finden (Typ 'L' = Lager)
+            List<Long> stockyardIds = jdbcTemplate.queryForList(
+                "SELECT ID FROM MD_STOCKYARD WHERE YARD_TYPE = 'L' ORDER BY YARD_NO",
+                Long.class);
+
+            if (stockyardIds.isEmpty()) {
+                // Fallback: alle Stockyards
+                stockyardIds = jdbcTemplate.queryForList(
+                    "SELECT ID FROM MD_STOCKYARD ORDER BY ID",
+                    Long.class);
+            }
+
+            if (stockyardIds.isEmpty()) {
+                log.warn("Keine Lagerplätze gefunden!");
+                return 0;
+            }
+
+            log.info("Gefunden: {} Lagerplätze", stockyardIds.size());
+
+            // Test-Barren erstellen
+            int created = 0;
+            for (int i = 0; i < Math.min(10, stockyardIds.size()); i++) {
+                Long stockyardId = stockyardIds.get(i);
+                Long nextId = getNextId();
+                String ingotNo = String.format("TEST-%06d", nextId);
+
+                // Zufällige Größen
+                int length = 1800 + (i % 3) * 500;  // 1800, 2300, 2800
+                int width = 400 + (i % 2) * 100;    // 400, 500
+                int thickness = 180 + (i % 2) * 40; // 180, 220
+                int weight = 8000 + i * 500;        // 8000 - 12500
+
+                jdbcTemplate.update(
+                    "INSERT INTO TD_INGOT (ID, SERIAL, INGOT_NO, STOCKYARD_ID, PILE_POSITION, " +
+                    "WEIGHT, LENGTH, WIDTH, THICKNESS, HEAD_SAWN, FOOT_SAWN, SCRAP, REVISED, ROTATED, " +
+                    "PICKUPS, MOVEMENTS, TRANSPORTS, LOADINGS, IN_STOCK_SINCE) " +
+                    "VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, 0, 0, 0, 0, 0, CURRENT_TIMESTAMP)",
+                    nextId, ingotNo, stockyardId, 1, weight, length, width, thickness
+                );
+
+                log.info("Test-Barren erstellt: {} auf Lagerplatz {} ({} kg)", ingotNo, stockyardId, weight);
+                created++;
+            }
+
+            log.info("=== {} Test-Barren erstellt ===", created);
+            return created;
+
+        } catch (Exception e) {
+            log.error("Fehler beim Erstellen der Test-Barren: {}", e.getMessage(), e);
+            return 0;
+        }
     }
 }

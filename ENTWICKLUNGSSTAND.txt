@@ -1,9 +1,9 @@
 =============================================================================
 ENTWICKLUNGSSTAND - PLSBL Vaadin Starter
-Stand: 25.01.2026
+Stand: 26.01.2026
 =============================================================================
 
-AKTUELLES THEMA: Barrentypen-Konfiguration (wie Original-App)
+AKTUELLES THEMA: Barrentypen-Berechtigungen implementieren
 -----------------------------------------------------------------------------
 
 ZIEL:
@@ -15,7 +15,86 @@ ZIEL:
 ABGESCHLOSSENE ARBEITEN:
 -----------------------------------------------------------------------------
 
-1. [NEU 25.01.2026] Barrentypen-System implementiert
+1. [NEU 26.01.2026] MITTEL-Barren → SWAPOUT für Stapler-Transport
+
+   Implementiert wie im Original-System: MITTEL-Barren werden nicht intern
+   gelagert, sondern auf SWAPOUT-Plätze (Ausgang 00/xx) gelegt, wo der
+   Stapler sie zu externen Lagerplätzen fährt.
+
+   a) StockyardType Enum korrigiert:
+      - SWAPOUT = 'A' (war vorher 'O', AUSGANG entfernt)
+      - Wie im Original-System (StockyardType.java aus plsbl-pdo)
+      Datei: src/main/java/com/hydro/plsbl/entity/enums/StockyardType.java
+
+   b) Neues Feld sawToSwapout in IngotType:
+      - Wenn true: Barren wird von Säge auf SWAPOUT-Platz gelegt
+      - MITTEL-Barren haben sawToSwapout=true
+      Dateien: IngotType.java, IngotTypeDTO.java, IngotTypeService.java
+
+   c) IngotStorageService.findTargetStockyard() überarbeitet:
+      - Prüft sawToSwapout ZUERST (vor intern/extern)
+      - Wenn sawToSwapout=true → suche SWAPOUT-Platz (00/01-00/08)
+      - Neue Methode findSwapoutYard() - sucht freie Ausgang-Plätze
+      - Klare Log-Ausgabe: "*** STAPLER-TRANSPORT ERFORDERLICH ***"
+      Datei: src/main/java/com/hydro/plsbl/service/IngotStorageService.java
+
+   d) Testdaten aktualisiert (data-h2.sql):
+      - Plätze 00/01 bis 00/08: YARD_TYPE='A' (SWAPOUT), MAX_INGOTS=1
+      - MITTEL-Barrentyp: SAW_TO_SWAPOUT=TRUE
+
+   e) Schema aktualisiert (schema-h2.sql):
+      - Neues Feld SAW_TO_SWAPOUT in MD_INGOTTYPE
+
+   f) Kran-Visualisierung für SWAPOUT-Bereich:
+      - updateCranePixelPosition() erweitert
+      - Neue Konstanten: MM_SWAPOUT_Y_MIN=11530, MM_SWAPOUT_Y_MAX=30830
+      - PIXEL_SWAPOUT_X = PIXEL_SAW_X (Spalte 24 Mitte)
+      - Kran wird korrekt über SWAPOUT-Plätzen 00/01-00/08 angezeigt
+      Datei: src/main/java/com/hydro/plsbl/ui/component/LagerGrid.java
+
+   g) Oracle SQL-Kompatibilität:
+      - TO_STOCK_ALLOWED = 1 statt = TRUE (Oracle unterstützt kein TRUE)
+      Datei: src/main/java/com/hydro/plsbl/repository/StockyardRepository.java
+
+   h) Externe Plätze von Kran-Zielen ausgeschlossen:
+      - findAvailableDestinations() filtert YARD_TYPE != 'E'
+      - Externe Plätze werden nicht vom Kran bedient (Stapler-Transport)
+      - Verhindert ungültige Kran-Bewegungen zu externen Plätzen
+      Datei: src/main/java/com/hydro/plsbl/repository/StockyardRepository.java
+
+   i) Manuelle Umbuchung ohne Kran (für Stapler-Transport):
+      - Neue Methode findAvailableDestinationsIncludingExternal()
+      - UmlagernDialog: "Nur Datenbank" Modus zeigt ALLE Plätze inkl. externe
+      - "Mit Kran" Modus zeigt nur Kran-erreichbare Plätze
+      - Ziel-Liste wird bei Modus-Wechsel automatisch neu geladen
+      - Workflow: SWAPOUT-Platz → Stapler fährt → "Nur Datenbank" auf externen Platz buchen
+      Dateien: StockyardRepository.java, StockyardService.java, UmlagernDialog.java
+
+   j) Lagerplatz-Verwaltungsdialog (NEU):
+      - StockyardManagementDialog mit Filter und Bearbeitungsfunktion
+      - Filter nach: Typ (Intern, Extern, SWAPOUT), Verwendung (SHORT, LONG), Text-Suche
+      - Grid-Ansicht aller Lagerplätze mit Sortierung
+      - Bearbeitungsformular: Typ, Verwendung, Koordinaten, Kran-Position (mm),
+        Max. Barren, Ein-/Auslagern erlaubt
+      - Zugriff über: Einstellungen → Stammdaten → "Lagerplätze verwalten"
+      Datei: src/main/java/com/hydro/plsbl/ui/dialog/StockyardManagementDialog.java
+
+   Workflow für MITTEL-Barren (wie Original):
+   1. Barren (4300-7400mm) kommt von Säge
+   2. System erkennt: sawToSwapout=true, internalAllowed=false
+   3. Kran legt Barren auf SWAPOUT-Platz (00/01, 00/02, etc.)
+   4. Meldung im Log: "*** STAPLER-TRANSPORT ERFORDERLICH ***"
+   5. Stapler holt Barren ab und fährt zu externem Lagerplatz
+   6. Manuelle Buchung im System auf externen Platz
+
+   Barrentyp-Berechtigungen (aus Stammdaten):
+   | Name   | Intern | Extern | sawToSwapout | Effekt                      |
+   |--------|--------|--------|--------------|------------------------------|
+   | KURZ   | Ja     | Ja     | Nein         | Normal intern einlagern      |
+   | LANG   | Ja     | Ja     | Nein         | Normal intern einlagern      |
+   | MITTEL | Nein   | Ja     | Ja           | → SWAPOUT für Stapler        |
+
+2. [NEU 25.01.2026] Barrentypen-System implementiert
 
    a) Neue Entity: IngotType (MD_INGOTTYPE)
       - Name, Beschreibung
@@ -186,9 +265,11 @@ ZUGRIFF auf neue Funktionen:
 NÄCHSTE SCHRITTE:
 -----------------------------------------------------------------------------
 
-1. Oracle-Migration für MD_INGOTTYPE ausführen
-2. MITTEL-Barren: Externe Lagerung implementieren (YARD_TYPE='E')
-3. Auto-Auslagerung für MITTEL-Barren implementieren
-4. Regex-Matching für Produktnummern testen
+1. Oracle-Migration für MD_INGOTTYPE ausführen (inkl. SAW_TO_SWAPOUT Feld)
+2. [ERLEDIGT] MITTEL-Barren: SWAPOUT-Logik implementiert (Stapler-Transport)
+3. Externe Plätze verwalten (Buchung ohne Kran, manuelle Umbuchung)
+4. Auto-Auslagerung für MITTEL-Barren implementieren (autoRetrieval=true)
+5. Regex-Matching für Produktnummern testen
+6. MITTEL-Barren-Einlagerung testen (manuell über SawView)
 
 =============================================================================

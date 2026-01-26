@@ -59,10 +59,182 @@ public class CalloffService {
             } else {
                 log.info("Calloff-Tabelle enthält {} Einträge", count);
             }
+
+            // Spalten der Tabelle loggen
+            logTableColumns();
+
         } catch (Exception e) {
             log.warn("Konnte Calloff-Daten nicht prüfen (Tabelle existiert evtl. nicht): {}", e.getMessage());
             // Tabelle existiert nicht - erstellen wir sie
             createTableAndTestData();
+        }
+    }
+
+    /**
+     * Erstellt Test-Abrufe zum Testen der Lieferfunktion.
+     * Findet alle Produkte mit Barren im Lager und erstellt je einen Abruf.
+     */
+    @Transactional
+    public void createTestCalloff() {
+        try {
+            log.info("=== Erstelle Test-Abrufe für alle Produkte mit Barren im Lager ===");
+
+            // Alle Produkte finden, die Barren im Lager haben
+            List<Long> productIds = new ArrayList<>();
+            List<String> productInfos = new ArrayList<>();
+
+            try {
+                jdbcTemplate.query(
+                    "SELECT i.PRODUCT_ID, p.PRODUCT_NO, COUNT(*) as CNT " +
+                    "FROM TD_INGOT i LEFT JOIN MD_PRODUCT p ON i.PRODUCT_ID = p.ID " +
+                    "WHERE i.STOCKYARD_ID IS NOT NULL AND i.PRODUCT_ID IS NOT NULL " +
+                    "GROUP BY i.PRODUCT_ID, p.PRODUCT_NO ORDER BY CNT DESC",
+                    rs -> {
+                        Long productId = rs.getLong("PRODUCT_ID");
+                        String productNo = rs.getString("PRODUCT_NO");
+                        int count = rs.getInt("CNT");
+                        productIds.add(productId);
+                        productInfos.add(String.format("PRODUCT_ID=%d (%s): %d Barren", productId, productNo, count));
+                    });
+                log.info("Produkte mit Barren im Lager: {}", productInfos);
+            } catch (Exception e) {
+                log.warn("Konnte Produkte mit Barren nicht finden: {}", e.getMessage());
+            }
+
+            // Fallback: Falls keine Produkte mit Barren, alle Barren ohne Produkt-Filter verfügbar machen
+            if (productIds.isEmpty()) {
+                log.warn("Keine Produkte mit Barren gefunden, erstelle Fallback-Abruf ohne PRODUCT_ID");
+                createSingleTestCalloff(null, "TEST-001");
+                return;
+            }
+
+            // Für jedes Produkt einen Abruf erstellen
+            for (Long productId : productIds) {
+                String productNo = null;
+                try {
+                    productNo = jdbcTemplate.queryForObject(
+                        "SELECT PRODUCT_NO FROM MD_PRODUCT WHERE ID = ?", String.class, productId);
+                } catch (Exception e) {
+                    productNo = "PROD-" + productId;
+                }
+
+                // SAP_PRODUCT_NO auf 9 Zeichen begrenzen
+                String sapProductNo = productNo != null && productNo.length() > 9
+                    ? productNo.substring(0, 9) : productNo;
+
+                createSingleTestCalloff(productId, sapProductNo);
+            }
+
+            log.info("=== {} Test-Abrufe erstellt ===", productIds.size());
+
+        } catch (Exception e) {
+            log.error("Fehler beim Erstellen der Test-Abrufe: {}", e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Erstellt einen einzelnen Test-Abruf
+     */
+    private void createSingleTestCalloff(Long productId, String sapProductNo) {
+        try {
+            // Nächste ID ermitteln
+            Long maxId = jdbcTemplate.queryForObject("SELECT COALESCE(MAX(ID), 0) + 1 FROM TD_CALLOFF", Long.class);
+            if (maxId == null) maxId = 1L;
+
+            // Anzahl Barren für dieses Produkt ermitteln
+            int barrenCount = 5;
+            if (productId != null) {
+                try {
+                    Integer count = jdbcTemplate.queryForObject(
+                        "SELECT COUNT(*) FROM TD_INGOT WHERE PRODUCT_ID = ? AND STOCKYARD_ID IS NOT NULL",
+                        Integer.class, productId);
+                    barrenCount = count != null ? Math.min(count, 10) : 5;
+                } catch (Exception e) {
+                    log.debug("Konnte Barren-Anzahl nicht ermitteln: {}", e.getMessage());
+                }
+            }
+
+            String sql = """
+                INSERT INTO TD_CALLOFF (ID, SERIAL, CALLOFF_NO, ORDER_NO, ORDER_POS,
+                    CUSTOMER_NO, CUSTOMER_ADDRESS, DESTINATION, SAP_PRODUCT_NO, PRODUCT_ID,
+                    AMOUNT_REQUESTED, AMOUNT_DELIVERED, DELIVERY, APPROVED, COMPLETED, RECEIVED, NORMTEXT)
+                VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 1, 0, ?, ?)
+                """;
+
+            LocalDateTime now = LocalDateTime.now();
+            LocalDateTime deliveryDate = now.plusDays(2);
+
+            jdbcTemplate.update(sql,
+                maxId,
+                String.valueOf(99000 + maxId),  // CALLOFF_NO (max 10 Zeichen)
+                "45099" + String.format("%03d", maxId % 1000),  // ORDER_NO (max 8 Zeichen)
+                "10",                      // ORDER_POS
+                "100999",                  // CUSTOMER_NO
+                "Test Adresse\n12345 Teststadt",  // CUSTOMER_ADDRESS
+                "NF2",                     // DESTINATION
+                sapProductNo,              // SAP_PRODUCT_NO
+                productId,                 // PRODUCT_ID
+                barrenCount,               // AMOUNT_REQUESTED
+                java.sql.Timestamp.valueOf(deliveryDate),  // DELIVERY
+                java.sql.Timestamp.valueOf(now),           // RECEIVED
+                "Test-Abruf für Lieferung" // NORMTEXT
+            );
+
+            log.info("Test-Abruf {} erstellt: {} Barren bestellt, PRODUCT_ID={} ({}), Liefertermin {}, Ziel NF2",
+                99000 + maxId, barrenCount, productId, sapProductNo, deliveryDate.toLocalDate());
+
+        } catch (Exception e) {
+            log.error("Fehler beim Erstellen des Test-Abrufs: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * Loggt die Spaltennamen der TD_CALLOFF Tabelle
+     */
+    private void logTableColumns() {
+        try {
+            List<String> columns = jdbcTemplate.query(
+                "SELECT COLUMN_NAME FROM USER_TAB_COLUMNS WHERE TABLE_NAME = 'TD_CALLOFF' ORDER BY COLUMN_ID",
+                (rs, rowNum) -> rs.getString("COLUMN_NAME"));
+            log.info("TD_CALLOFF Spalten: {}", columns);
+
+            // Datenverteilung loggen
+            Integer total = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM TD_CALLOFF", Integer.class);
+            Integer completed = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM TD_CALLOFF WHERE COMPLETED = 1", Integer.class);
+            Integer incomplete = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM TD_CALLOFF WHERE COMPLETED = 0 OR COMPLETED IS NULL", Integer.class);
+
+            // Diagnose: Welche Produkte haben die Barren im Lager?
+            try {
+                List<String> ingotProducts = jdbcTemplate.query(
+                    "SELECT DISTINCT i.PRODUCT_ID, p.PRODUCT_NO, COUNT(*) as CNT " +
+                    "FROM TD_INGOT i LEFT JOIN MD_PRODUCT p ON i.PRODUCT_ID = p.ID " +
+                    "WHERE i.STOCKYARD_ID IS NOT NULL GROUP BY i.PRODUCT_ID, p.PRODUCT_NO",
+                    (rs, rowNum) -> "PRODUCT_ID=" + rs.getLong("PRODUCT_ID") +
+                                   " (" + rs.getString("PRODUCT_NO") + "): " + rs.getInt("CNT") + " Barren");
+                log.info("Barren im Lager nach Produkt: {}", ingotProducts);
+            } catch (Exception e) {
+                log.warn("Konnte Barren-Produkte nicht abfragen: {}", e.getMessage());
+            }
+            Integer approved = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM TD_CALLOFF WHERE APPROVED = 1", Integer.class);
+            log.info("TD_CALLOFF Daten: Gesamt={}, Erledigt={}, Offen={}, Genehmigt={}", total, completed, incomplete, approved);
+
+            // Alte Test-Abrufe löschen (haben evtl. falsche PRODUCT_ID)
+            try {
+                int deleted = jdbcTemplate.update("DELETE FROM TD_CALLOFF WHERE NORMTEXT = 'Test-Abruf für Lieferung'");
+                if (deleted > 0) {
+                    log.info("Alte Test-Abrufe gelöscht: {}", deleted);
+                }
+            } catch (Exception e) {
+                log.warn("Konnte alte Test-Abrufe nicht löschen: {}", e.getMessage());
+            }
+
+            // Test-Abruf erstellen falls keine offenen vorhanden
+            incomplete = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM TD_CALLOFF WHERE COMPLETED = 0 OR COMPLETED IS NULL", Integer.class);
+            if (incomplete == null || incomplete == 0) {
+                createTestCalloff();
+            }
+        } catch (Exception e) {
+            log.warn("Konnte Spalten/Daten nicht abfragen: {}", e.getMessage());
         }
     }
 
@@ -349,6 +521,41 @@ public class CalloffService {
     }
 
     /**
+     * Erhöht die gelieferte Menge (SQL-Version für Oracle)
+     */
+    @Transactional
+    public void addDeliveredAmount(Long calloffId, int amount) {
+        log.info("addDeliveredAmount: calloffId={}, amount={}", calloffId, amount);
+
+        // Aktuelle Werte holen
+        Integer currentDelivered = jdbcTemplate.queryForObject(
+            "SELECT AMOUNT_DELIVERED FROM TD_CALLOFF WHERE ID = ?", Integer.class, calloffId);
+        Integer requested = jdbcTemplate.queryForObject(
+            "SELECT AMOUNT_REQUESTED FROM TD_CALLOFF WHERE ID = ?", Integer.class, calloffId);
+
+        int newDelivered = (currentDelivered != null ? currentDelivered : 0) + amount;
+        int remaining = (requested != null ? requested : 0) - newDelivered;
+
+        // Update mit Oracle-Spaltennamen
+        if (remaining <= 0) {
+            // Automatisch abschließen wenn vollständig geliefert
+            jdbcTemplate.update(
+                "UPDATE TD_CALLOFF SET AMOUNT_DELIVERED = ?, COMPLETED = 1, SERIAL = SERIAL + 1 WHERE ID = ?",
+                newDelivered, calloffId);
+            log.info("Calloff {} vollständig geliefert und abgeschlossen ({}/{})",
+                calloffId, newDelivered, requested);
+        } else {
+            jdbcTemplate.update(
+                "UPDATE TD_CALLOFF SET AMOUNT_DELIVERED = ?, SERIAL = SERIAL + 1 WHERE ID = ?",
+                newDelivered, calloffId);
+            log.info("Calloff {} - {} Einheiten geliefert (gesamt: {}, offen: {})",
+                calloffId, amount, newDelivered, remaining);
+        }
+
+        dataBroadcaster.broadcast(DataBroadcaster.DataEventType.CALLOFF_CHANGED);
+    }
+
+    /**
      * Zählt alle Abrufe
      */
     public int countAll() {
@@ -372,95 +579,151 @@ public class CalloffService {
 
     /**
      * Sucht Abrufe nach erweiterten Kriterien (wie in der Original-Applikation)
+     * Verwendet die tatsächlichen Oracle-Spaltennamen:
+     * CALLOFF_NO, ORDER_NO, ORDER_POS, CUSTOMER_NO, SAP_PRODUCT_NO, DELIVERY
      */
     public List<CalloffDTO> searchByCriteria(CalloffSearchCriteria criteria) {
-        StringBuilder sql = new StringBuilder("SELECT * FROM TD_CALLOFF WHERE 1=1");
+        StringBuilder sql = new StringBuilder("SELECT c.* FROM TD_CALLOFF c WHERE 1=1");
         List<Object> params = new ArrayList<>();
 
-        // Text-Filter
+        // Text-Filter (Oracle-Spaltennamen)
         if (criteria.getCalloffNumber() != null && !criteria.getCalloffNumber().isEmpty()) {
-            sql.append(" AND CALLOFF_NUMBER LIKE ?");
+            sql.append(" AND c.CALLOFF_NO LIKE ?");
             params.add("%" + criteria.getCalloffNumber() + "%");
         }
 
         if (criteria.getOrderNumber() != null && !criteria.getOrderNumber().isEmpty()) {
-            sql.append(" AND ORDER_NUMBER LIKE ?");
+            sql.append(" AND c.ORDER_NO LIKE ?");
             params.add("%" + criteria.getOrderNumber() + "%");
         }
 
+        if (criteria.getOrderPosition() != null && !criteria.getOrderPosition().isEmpty()) {
+            sql.append(" AND c.ORDER_POS LIKE ?");
+            params.add("%" + criteria.getOrderPosition() + "%");
+        }
+
         if (criteria.getCustomerNumber() != null && !criteria.getCustomerNumber().isEmpty()) {
-            sql.append(" AND CUSTOMER_NUMBER LIKE ?");
+            sql.append(" AND c.CUSTOMER_NO LIKE ?");
             params.add("%" + criteria.getCustomerNumber() + "%");
         }
 
-        if (criteria.getDestination() != null && !criteria.getDestination().isEmpty()) {
-            sql.append(" AND DESTINATION LIKE ?");
+        if (criteria.isNoDestination()) {
+            sql.append(" AND (c.DESTINATION IS NULL OR c.DESTINATION = '')");
+        } else if (criteria.getDestination() != null && !criteria.getDestination().isEmpty()) {
+            sql.append(" AND c.DESTINATION LIKE ?");
             params.add("%" + criteria.getDestination() + "%");
         }
 
         if (criteria.getSapProductNumber() != null && !criteria.getSapProductNumber().isEmpty()) {
-            sql.append(" AND SAP_PRODUCT_NUMBER LIKE ?");
+            sql.append(" AND c.SAP_PRODUCT_NO LIKE ?");
             params.add("%" + criteria.getSapProductNumber() + "%");
         }
 
-        // Checkbox-Filter (BOOLEAN-Spalten)
+        // Artikel (Produkt-Nummer aus MD_PRODUCT verknüpfen wenn vorhanden)
+        if (criteria.getProductNumber() != null && !criteria.getProductNumber().isEmpty()) {
+            sql.append(" AND (c.SAP_PRODUCT_NO LIKE ? OR EXISTS (SELECT 1 FROM MD_PRODUCT p WHERE p.ID = c.PRODUCT_ID AND p.PRODUCT_NUMBER LIKE ?))");
+            params.add("%" + criteria.getProductNumber() + "%");
+            params.add("%" + criteria.getProductNumber() + "%");
+        }
+
+        // Liefertermin-Filter (Oracle Spalte: DELIVERY)
+        if (criteria.getDeliveryDateFrom() != null) {
+            sql.append(" AND c.DELIVERY >= ?");
+            params.add(java.sql.Timestamp.valueOf(criteria.getDeliveryDateFrom()));
+        }
+
+        if (criteria.getDeliveryDateTo() != null) {
+            sql.append(" AND c.DELIVERY <= ?");
+            params.add(java.sql.Timestamp.valueOf(criteria.getDeliveryDateTo()));
+        }
+
+        // Suchmuster (durchsucht mehrere Felder mit Oracle-Spaltennamen)
+        if (criteria.getSearchPattern() != null && !criteria.getSearchPattern().isEmpty()) {
+            sql.append(" AND (c.CALLOFF_NO LIKE ? OR c.ORDER_NO LIKE ? OR c.CUSTOMER_NO LIKE ? OR c.SAP_PRODUCT_NO LIKE ? OR c.DESTINATION LIKE ?)");
+            String pattern = "%" + criteria.getSearchPattern() + "%";
+            params.add(pattern);
+            params.add(pattern);
+            params.add(pattern);
+            params.add(pattern);
+            params.add(pattern);
+        }
+
+        // Checkbox-Filter (NUMBER(1)-Spalten in Oracle: 0=false, 1=true)
         if (criteria.isIncompleteOnly()) {
-            sql.append(" AND (COMPLETED = FALSE OR COMPLETED IS NULL)");
+            sql.append(" AND (c.COMPLETED = 0 OR c.COMPLETED IS NULL)");
+        }
+
+        if (criteria.isCompletedOnly()) {
+            sql.append(" AND c.COMPLETED = 1");
         }
 
         if (criteria.isApprovedOnly()) {
-            sql.append(" AND APPROVED = TRUE");
+            sql.append(" AND c.APPROVED = 1");
         }
 
         if (criteria.isNotApprovedOnly()) {
-            sql.append(" AND (APPROVED = FALSE OR APPROVED IS NULL)");
+            sql.append(" AND (c.APPROVED = 0 OR c.APPROVED IS NULL)");
         }
 
-        sql.append(" ORDER BY DELIVERY_DATE ASC NULLS LAST, ID ASC");
+        sql.append(" ORDER BY c.DELIVERY ASC NULLS LAST, c.ID ASC");
+
+        log.info("Calloff-Suche SQL: {}", sql);
+        log.info("Calloff-Suche Parameter: {}", params);
+        log.info("Criteria: incompleteOnly={}, completedOnly={}, notApprovedOnly={}",
+            criteria.isIncompleteOnly(), criteria.isCompletedOnly(), criteria.isNotApprovedOnly());
 
         try {
-            return jdbcTemplate.query(sql.toString(), params.toArray(), new CalloffRowMapper());
+            List<CalloffDTO> results = jdbcTemplate.query(sql.toString(), params.toArray(), new CalloffRowMapper());
+            log.info("Calloff-Suche ergab {} Treffer", results.size());
+            return results;
         } catch (Exception e) {
-            log.error("Fehler bei der Suche nach Abrufen: {}", e.getMessage());
+            log.error("Fehler bei der Suche nach Abrufen: {} - SQL: {}", e.getMessage(), sql, e);
             return List.of();
         }
     }
 
     /**
      * RowMapper für Calloff-Abfragen
+     * Verwendet die tatsächlichen Oracle-Spaltennamen:
+     * CALLOFF_NO, ORDER_NO, ORDER_POS, CUSTOMER_NO, SAP_PRODUCT_NO, DELIVERY, NORMTEXT
      */
     private static class CalloffRowMapper implements RowMapper<CalloffDTO> {
         @Override
         public CalloffDTO mapRow(ResultSet rs, int rowNum) throws SQLException {
             CalloffDTO dto = new CalloffDTO();
             dto.setId(rs.getLong("ID"));
-            dto.setTableSerial(rs.getObject("TABLESERIAL", Long.class));
-            dto.setCalloffNumber(rs.getString("CALLOFF_NUMBER"));
-            dto.setOrderNumber(rs.getString("ORDER_NUMBER"));
-            dto.setOrderPosition(rs.getString("ORDER_POSITION"));
-            dto.setCustomerNumber(rs.getString("CUSTOMER_NUMBER"));
-            dto.setCustomerName(rs.getString("CUSTOMER_NAME"));
+            // TABLESERIAL existiert nicht in Oracle DB
+            dto.setCalloffNumber(rs.getString("CALLOFF_NO"));
+            dto.setOrderNumber(rs.getString("ORDER_NO"));
+            dto.setOrderPosition(rs.getString("ORDER_POS"));
+            dto.setCustomerNumber(rs.getString("CUSTOMER_NO"));
+            // CUSTOMER_NAME existiert nicht, verwende NORMTEXT als Fallback
+            dto.setCustomerName(rs.getString("NORMTEXT"));
             dto.setCustomerAddress(rs.getString("CUSTOMER_ADDRESS"));
             dto.setDestination(rs.getString("DESTINATION"));
-            dto.setSapProductNumber(rs.getString("SAP_PRODUCT_NUMBER"));
+            dto.setSapProductNumber(rs.getString("SAP_PRODUCT_NO"));
             dto.setProductId(rs.getObject("PRODUCT_ID", Long.class));
             dto.setAmountRequested(rs.getObject("AMOUNT_REQUESTED", Integer.class));
             dto.setAmountDelivered(rs.getObject("AMOUNT_DELIVERED", Integer.class));
 
-            java.sql.Date deliveryDate = rs.getDate("DELIVERY_DATE");
-            if (deliveryDate != null) {
-                dto.setDeliveryDate(deliveryDate.toLocalDate());
+            // Oracle Spalte: DELIVERY (kann DATE oder TIMESTAMP sein)
+            java.sql.Timestamp delivery = rs.getTimestamp("DELIVERY");
+            if (delivery != null) {
+                dto.setDeliveryDate(delivery.toLocalDateTime().toLocalDate());
             }
 
-            dto.setApproved(rs.getBoolean("APPROVED"));
-            dto.setCompleted(rs.getBoolean("COMPLETED"));
+            // Oracle speichert Boolean als NUMBER(1): 0=false, 1=true
+            Integer approvedInt = rs.getObject("APPROVED", Integer.class);
+            dto.setApproved(approvedInt != null && approvedInt == 1);
+            Integer completedInt = rs.getObject("COMPLETED", Integer.class);
+            dto.setCompleted(completedInt != null && completedInt == 1);
 
             java.sql.Timestamp received = rs.getTimestamp("RECEIVED");
             if (received != null) {
                 dto.setReceived(received.toLocalDateTime());
             }
 
-            dto.setNotes(rs.getString("NOTES"));
+            // NOTES existiert nicht in Oracle DB
             return dto;
         }
     }

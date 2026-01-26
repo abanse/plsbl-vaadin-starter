@@ -84,7 +84,7 @@ public class LagerGrid extends Div {
      * - X: 96740 (17/xx, links im UI) bis 9300 (Säge, rechts im UI)
      * - Y: 6270 (xx/01, unten) bis 35630 (xx/10, oben)
      *
-     * AUSGANG-Plätze (00/01-00/08) werden NICHT einbezogen, da sie
+     * SWAPOUT-Plätze (00/01-00/08) werden NICHT einbezogen, da sie
      * dieselben X-Koordinaten wie die Säge haben aber separat dargestellt werden.
      */
     private void calculateStockBounds(Collection<StockyardDTO> stockyards) {
@@ -101,7 +101,7 @@ public class LagerGrid extends Div {
 
         for (StockyardDTO yard : stockyards) {
             // INTERNAL und SAW Plätze für die Grenzen-Berechnung verwenden
-            // AUSGANG wird ausgeschlossen (hat gleiche X wie SAW, wird separat dargestellt)
+            // SWAPOUT wird ausgeschlossen (hat gleiche X wie SAW, wird separat dargestellt)
             StockyardType type = yard.getType();
             if (type != StockyardType.INTERNAL && type != StockyardType.SAW) {
                 continue;
@@ -1304,12 +1304,34 @@ public class LagerGrid extends Div {
 
         int pixelX, pixelY;
 
+        // === SWAPOUT-BEREICH (00/01-00/08) ===
+        // SWAPOUT-Plätze haben X=9440 (neben Säge), Y im normalen Bereich (11530-30830)
+        // Visuell in Spalte 24 dargestellt (gleiche Spalte wie Säge, aber andere Y-Position)
+        final int PIXEL_SWAPOUT_X = PIXEL_SAW_X;  // Spalte 24 Mitte (gleich wie Säge)
+        final int MM_SWAPOUT_X = 9440;     // SWAPOUT X-Koordinate aus Oracle
+        final int MM_SWAPOUT_Y_MIN = 11530; // 00/01 Y
+        final int MM_SWAPOUT_Y_MAX = 30830; // 00/08 Y
+
         // === SONDERFALL: SÄGE-BEREICH ===
         // Wenn Kran im Säge-Bereich (X < 12000 und Y > 35500), direkte Säge-Position verwenden
         if (craneMmX < 12000 && craneMmY > 35500) {
             pixelX = PIXEL_SAW_X;
             pixelY = PIXEL_SAW_Y;
             log.info("Crane at SAW position: mm({},{}) -> pixel({},{})", craneMmX, craneMmY, pixelX, pixelY);
+        }
+        // === SONDERFALL: SWAPOUT-BEREICH (00/01-00/08) ===
+        // Wenn Kran bei SWAPOUT-X (ca. 9440) und Y im normalen Bereich
+        else if (craneMmX < 12000 && craneMmY >= MM_SWAPOUT_Y_MIN - 1000 && craneMmY <= MM_SWAPOUT_Y_MAX + 1000) {
+            pixelX = PIXEL_SWAPOUT_X;
+            // Y: Normale Interpolation basierend auf SWAPOUT Y-Bereich
+            // SWAPOUT Y-Bereich (11530-30830) auf Pixel Y-Bereich mappen
+            // Die SWAPOUT-Plätze sind ungefähr auf Y=3 bis Y=9 (visuell)
+            double ratioY = (double)(MM_SWAPOUT_Y_MAX - craneMmY) / (MM_SWAPOUT_Y_MAX - MM_SWAPOUT_Y_MIN);
+            // Pixel Y für SWAPOUT: von ca. 180 (oben, Y=9) bis ca. 460 (unten, Y=3)
+            final int PIXEL_SWAPOUT_Y_TOP = 180;    // 00/08 (oben)
+            final int PIXEL_SWAPOUT_Y_BOTTOM = 460; // 00/01 (unten)
+            pixelY = PIXEL_SWAPOUT_Y_TOP + (int)(ratioY * (PIXEL_SWAPOUT_Y_BOTTOM - PIXEL_SWAPOUT_Y_TOP)) + PIXEL_Y_OFFSET;
+            log.info("Crane at SWAPOUT position: mm({},{}) -> pixel({},{})", craneMmX, craneMmY, pixelX, pixelY);
         } else {
             // === NORMALE LINEARE INTERPOLATION ===
             // X: Hohe mm-Werte (96740) -> niedrige Pixel, niedrige mm-Werte (16740) -> hohe Pixel

@@ -1101,8 +1101,8 @@ public class SawView extends VerticalLayout {
             return;
         }
 
-        // Ausgang-Platz finden
-        String typeCode = String.valueOf(StockyardType.AUSGANG.getCode());
+        // Ausgang/Swapout-Platz finden (für Stapler-Transport)
+        String typeCode = String.valueOf(StockyardType.SWAPOUT.getCode());
         java.util.List<StockyardDTO> exitYards = stockyardService.findAvailableByType(typeCode);
 
         Dialog dialog = new Dialog();

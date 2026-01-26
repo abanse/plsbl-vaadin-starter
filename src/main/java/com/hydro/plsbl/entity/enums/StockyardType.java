@@ -7,9 +7,8 @@ public enum StockyardType {
     INTERNAL('I', "Intern"),
     EXTERNAL('E', "Extern"),
     SAW('S', "Säge"),
-    SWAPOUT('O', "Auslagerung"),
-    LOADING('L', "Verladung"),
-    AUSGANG('A', "Ausgang");
+    SWAPOUT('A', "Ausgang/Auslagerung"),  // Stapler-Abholplatz für externe Lagerung
+    LOADING('L', "Verladung");
     
     private final char code;
     private final String displayName;
@@ -31,7 +30,7 @@ public enum StockyardType {
      * Wird dieser Typ in der Lager-Ansicht angezeigt?
      */
     public boolean isShownInStockView() {
-        return this == INTERNAL || this == EXTERNAL || this == LOADING || this == SAW || this == AUSGANG;
+        return this == INTERNAL || this == EXTERNAL || this == LOADING || this == SAW || this == SWAPOUT;
     }
     
     public static StockyardType fromCode(char code) {
@@ -40,9 +39,10 @@ public enum StockyardType {
                 return type;
             }
         }
-        throw new IllegalArgumentException("Unknown StockyardType code: " + code);
+        // Unbekannte Codes werden als null zurückgegeben (z.B. 'X' in alten Daten)
+        return null;
     }
-    
+
     public static StockyardType fromCode(String code) {
         if (code == null || code.isEmpty()) {
             return null;

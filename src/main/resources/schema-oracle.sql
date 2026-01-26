@@ -20,6 +20,8 @@
 --     8. TD_PLSSTATUS       - Säge-Status
 --     9. TD_TRANSPORTORDER  - Transportaufträge
 --    10. TD_CALLOFF         - Abrufe/Kundenbestellungen
+--    11. TD_SHIPMENT        - Lieferscheine
+--    12. TD_SHIPMENTLINE    - Lieferschein-Positionen
 --
 -- ===================================================================
 
@@ -355,6 +357,72 @@ COMMENT ON COLUMN TD_CALLOFF.COMPLETED IS 'Abgeschlossen (1=Ja)';
 
 CREATE INDEX IDX_CALLOFF_APPROVED ON TD_CALLOFF(APPROVED);
 CREATE INDEX IDX_CALLOFF_COMPLETED ON TD_CALLOFF(COMPLETED);
+
+
+-- -------------------------------------------------------------------
+-- 11. TD_SHIPMENT - Lieferscheine
+-- -------------------------------------------------------------------
+CREATE TABLE TD_SHIPMENT (
+    ID              NUMBER(19) NOT NULL,
+    SERIAL          NUMBER(19) DEFAULT 1 NOT NULL,
+    SHIPMENT_NO     VARCHAR2(20) NOT NULL,
+    ORDER_NO        VARCHAR2(50),
+    DESTINATION     VARCHAR2(100),
+    CUSTOMER_NO     VARCHAR2(50),
+    ADDRESS         VARCHAR2(500),
+    PRINTED         TIMESTAMP,
+    DELIVERED       TIMESTAMP,
+    CONSTRAINT PK_SHIPMENT PRIMARY KEY (ID),
+    CONSTRAINT UK_SHIPMENT_NO UNIQUE (SHIPMENT_NO)
+);
+
+COMMENT ON TABLE TD_SHIPMENT IS 'Lieferscheine für ausgelieferte Barren';
+COMMENT ON COLUMN TD_SHIPMENT.SHIPMENT_NO IS 'Lieferscheinnummer (eindeutig)';
+COMMENT ON COLUMN TD_SHIPMENT.ORDER_NO IS 'Auftragsnummer';
+COMMENT ON COLUMN TD_SHIPMENT.DESTINATION IS 'Lieferort';
+COMMENT ON COLUMN TD_SHIPMENT.CUSTOMER_NO IS 'Kundennummer';
+COMMENT ON COLUMN TD_SHIPMENT.PRINTED IS 'Druckzeitpunkt';
+COMMENT ON COLUMN TD_SHIPMENT.DELIVERED IS 'Lieferzeitpunkt';
+
+CREATE INDEX IDX_SHIPMENT_NO ON TD_SHIPMENT(SHIPMENT_NO);
+CREATE INDEX IDX_SHIPMENT_DELIVERED ON TD_SHIPMENT(DELIVERED);
+
+
+-- -------------------------------------------------------------------
+-- 12. TD_SHIPMENTLINE - Lieferschein-Positionen
+-- -------------------------------------------------------------------
+CREATE TABLE TD_SHIPMENTLINE (
+    ID              NUMBER(19) NOT NULL,
+    SERIAL          NUMBER(19) DEFAULT 1 NOT NULL,
+    SHIPMENT_ID     NUMBER(19) NOT NULL,
+    SHIPMENT_POS    NUMBER(10) NOT NULL,
+    INGOT_NO        VARCHAR2(20),
+    INGOT_ID        NUMBER(19),
+    INGOT_COMMENT   VARCHAR2(200),
+    WEIGHT          NUMBER(10),
+    LENGTH          NUMBER(10),
+    THICKNESS       NUMBER(10),
+    WIDTH           NUMBER(10),
+    HEAD_SAWN       NUMBER(1) DEFAULT 0,
+    FOOT_SAWN       NUMBER(1) DEFAULT 0,
+    SCRAP           NUMBER(1) DEFAULT 0,
+    REVISED         NUMBER(1) DEFAULT 0,
+    PRODUCT_NO      VARCHAR2(50),
+    SAP_PRODUCT_NO  VARCHAR2(50),
+    CALLOFF_NO      VARCHAR2(50),
+    ORDER_POS       VARCHAR2(50),
+    CONSTRAINT PK_SHIPMENTLINE PRIMARY KEY (ID),
+    CONSTRAINT FK_SHIPMENTLINE_SHIPMENT FOREIGN KEY (SHIPMENT_ID) REFERENCES TD_SHIPMENT(ID)
+);
+
+COMMENT ON TABLE TD_SHIPMENTLINE IS 'Lieferschein-Positionen (Barren pro Lieferschein)';
+COMMENT ON COLUMN TD_SHIPMENTLINE.SHIPMENT_POS IS 'Position im Lieferschein (1, 2, 3, ...)';
+COMMENT ON COLUMN TD_SHIPMENTLINE.INGOT_NO IS 'Barrennummer';
+COMMENT ON COLUMN TD_SHIPMENTLINE.WEIGHT IS 'Gewicht in kg';
+COMMENT ON COLUMN TD_SHIPMENTLINE.PRODUCT_NO IS 'Produktnummer';
+COMMENT ON COLUMN TD_SHIPMENTLINE.SAP_PRODUCT_NO IS 'SAP-Produktnummer';
+
+CREATE INDEX IDX_SHIPMENTLINE_SHIPMENT ON TD_SHIPMENTLINE(SHIPMENT_ID);
 
 
 -- ===================================================================

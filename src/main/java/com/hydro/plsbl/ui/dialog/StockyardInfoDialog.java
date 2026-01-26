@@ -5,7 +5,10 @@ import com.hydro.plsbl.dto.StockyardDTO;
 import com.hydro.plsbl.dto.StockyardStatusDTO;
 import com.hydro.plsbl.dto.TransportOrderDTO;
 import com.hydro.plsbl.entity.enums.StockyardUsage;
+import com.hydro.plsbl.entity.transdata.Shipment;
 import com.hydro.plsbl.service.IngotService;
+import com.hydro.plsbl.service.LieferscheinPdfService;
+import com.hydro.plsbl.service.ShipmentService;
 import com.hydro.plsbl.service.StockyardService;
 import com.hydro.plsbl.service.TransportOrderService;
 import com.vaadin.flow.component.button.Button;
@@ -14,6 +17,7 @@ import com.vaadin.flow.component.confirmdialog.ConfirmDialog;
 import com.vaadin.flow.component.dialog.Dialog;
 import com.vaadin.flow.component.formlayout.FormLayout;
 import com.vaadin.flow.component.grid.Grid;
+import com.vaadin.flow.component.html.Anchor;
 import com.vaadin.flow.component.html.H3;
 import com.vaadin.flow.component.html.Hr;
 import com.vaadin.flow.component.html.Span;
@@ -23,8 +27,13 @@ import com.vaadin.flow.component.notification.NotificationVariant;
 import com.vaadin.flow.component.orderedlayout.FlexComponent;
 import com.vaadin.flow.component.orderedlayout.HorizontalLayout;
 import com.vaadin.flow.component.orderedlayout.VerticalLayout;
+import com.vaadin.flow.component.textfield.TextArea;
+import com.vaadin.flow.component.textfield.TextField;
+import com.vaadin.flow.server.StreamResource;
 
 import com.hydro.plsbl.plc.PlcService;
+
+import java.io.ByteArrayInputStream;
 
 import java.time.format.DateTimeFormatter;
 import java.util.List;
@@ -42,6 +51,8 @@ public class StockyardInfoDialog extends Dialog {
     private final StockyardService stockyardService;
     private final PlcService plcService;
     private final TransportOrderService transportOrderService;
+    private final ShipmentService shipmentService;
+    private final LieferscheinPdfService pdfService;
     private Consumer<StockyardDTO> onEdit;
     private Consumer<IngotDTO> onIngotEdit;
     private Consumer<Void> onRelocated;
@@ -52,12 +63,15 @@ public class StockyardInfoDialog extends Dialog {
 
     public StockyardInfoDialog(StockyardDTO stockyard, IngotService ingotService,
                                StockyardService stockyardService, PlcService plcService,
-                               TransportOrderService transportOrderService) {
+                               TransportOrderService transportOrderService,
+                               ShipmentService shipmentService, LieferscheinPdfService pdfService) {
         this.stockyard = stockyard;
         this.ingotService = ingotService;
         this.stockyardService = stockyardService;
         this.plcService = plcService;
         this.transportOrderService = transportOrderService;
+        this.shipmentService = shipmentService;
+        this.pdfService = pdfService;
 
         setHeaderTitle("Lagerplatz " + stockyard.getYardNumber());
         setWidth("750px");
@@ -69,16 +83,22 @@ public class StockyardInfoDialog extends Dialog {
 
     // Backwards compatibility constructors
     public StockyardInfoDialog(StockyardDTO stockyard, IngotService ingotService,
+                               StockyardService stockyardService, PlcService plcService,
+                               TransportOrderService transportOrderService) {
+        this(stockyard, ingotService, stockyardService, plcService, transportOrderService, null, null);
+    }
+
+    public StockyardInfoDialog(StockyardDTO stockyard, IngotService ingotService,
                                StockyardService stockyardService, PlcService plcService) {
-        this(stockyard, ingotService, stockyardService, plcService, null);
+        this(stockyard, ingotService, stockyardService, plcService, null, null, null);
     }
 
     public StockyardInfoDialog(StockyardDTO stockyard, IngotService ingotService, StockyardService stockyardService) {
-        this(stockyard, ingotService, stockyardService, null, null);
+        this(stockyard, ingotService, stockyardService, null, null, null, null);
     }
 
     public StockyardInfoDialog(StockyardDTO stockyard, IngotService ingotService) {
-        this(stockyard, ingotService, null, null, null);
+        this(stockyard, ingotService, null, null, null, null, null);
     }
 
     private void createContent() {
@@ -530,6 +550,13 @@ public class StockyardInfoDialog extends Dialog {
         relocateButton.setEnabled(stockyard.getStatus() != null && !stockyard.getStatus().isEmpty());
         relocateButton.addClickListener(e -> openUmlagernDialog());
 
+        // Liefern ohne Kran Button
+        Button deliverButton = new Button("Liefern", VaadinIcon.TRUCK.create());
+        deliverButton.addThemeVariants(ButtonVariant.LUMO_SUCCESS);
+        deliverButton.setEnabled(shipmentService != null && stockyard.getStatus() != null && !stockyard.getStatus().isEmpty());
+        deliverButton.getElement().setAttribute("title", "Barren ohne Kran liefern und Lieferschein erstellen");
+        deliverButton.addClickListener(e -> openDeliverDialog());
+
         Button editButton = new Button("Bearbeiten", VaadinIcon.EDIT.create());
         editButton.addThemeVariants(ButtonVariant.LUMO_PRIMARY);
         editButton.addClickListener(e -> {
@@ -540,7 +567,7 @@ public class StockyardInfoDialog extends Dialog {
         });
 
         HorizontalLayout footer = new HorizontalLayout(
-            closeButton, spacer, mergeButton, splitButton, relocateButton, editButton);
+            closeButton, spacer, mergeButton, splitButton, relocateButton, deliverButton, editButton);
         footer.setWidthFull();
 
         getFooter().add(footer);
@@ -619,5 +646,166 @@ public class StockyardInfoDialog extends Dialog {
 
     public void setOnSplit(Consumer<StockyardDTO> onSplit) {
         this.onSplit = onSplit;
+    }
+
+    /**
+     * Öffnet den Dialog zum Liefern von Barren ohne Kran
+     */
+    private void openDeliverDialog() {
+        if (shipmentService == null) {
+            Notification.show("Lieferschein-Service nicht verfügbar", 3000, Notification.Position.MIDDLE);
+            return;
+        }
+
+        // Barren auf diesem Lagerplatz laden
+        List<IngotDTO> ingots = ingotService.findByStockyardId(stockyard.getId());
+        if (ingots.isEmpty()) {
+            Notification.show("Keine Barren auf diesem Lagerplatz", 3000, Notification.Position.MIDDLE);
+            return;
+        }
+
+        // Dialog erstellen
+        Dialog deliverDialog = new Dialog();
+        deliverDialog.setHeaderTitle("Liefern ohne Kran - " + stockyard.getYardNumber());
+        deliverDialog.setWidth("700px");
+        deliverDialog.setModal(true);
+        deliverDialog.setCloseOnOutsideClick(false);
+
+        VerticalLayout content = new VerticalLayout();
+        content.setPadding(true);
+        content.setSpacing(true);
+
+        // Lieferschein-Daten
+        content.add(new H3("Lieferschein-Daten"));
+
+        FormLayout form = new FormLayout();
+        form.setResponsiveSteps(new FormLayout.ResponsiveStep("0", 2));
+
+        TextField orderNoField = new TextField("Auftrags-Nr.");
+        orderNoField.setWidth("150px");
+
+        TextField destinationField = new TextField("Lieferort");
+        destinationField.setWidth("100px");
+        destinationField.setRequired(true);
+
+        TextField customerNoField = new TextField("Kunden-Nr.");
+        customerNoField.setWidth("150px");
+
+        TextArea addressField = new TextArea("Adresse");
+        addressField.setWidth("100%");
+        addressField.setHeight("60px");
+
+        form.add(orderNoField, destinationField, customerNoField, addressField);
+        content.add(form);
+
+        // Barren-Auswahl
+        content.add(new Hr());
+        content.add(new H3("Barren auswählen (" + ingots.size() + " verfügbar)"));
+
+        Grid<IngotDTO> selectGrid = new Grid<>();
+        selectGrid.setItems(ingots);
+        selectGrid.setSelectionMode(Grid.SelectionMode.MULTI);
+        selectGrid.setHeight("200px");
+
+        selectGrid.addColumn(IngotDTO::getIngotNo).setHeader("Barren-Nr").setAutoWidth(true);
+        selectGrid.addColumn(IngotDTO::getProductNo).setHeader("Produkt").setAutoWidth(true);
+        selectGrid.addColumn(i -> i.getWeight() != null ? i.getWeight() + " kg" : "-").setHeader("Gewicht").setAutoWidth(true);
+
+        // Alle auswählen
+        selectGrid.asMultiSelect().select(ingots);
+
+        content.add(selectGrid);
+
+        // Info-Zeile
+        Span infoLabel = new Span(ingots.size() + " Barren ausgewählt");
+        infoLabel.getStyle().set("font-weight", "bold");
+        content.add(infoLabel);
+
+        selectGrid.asMultiSelect().addValueChangeListener(e -> {
+            int count = e.getValue().size();
+            int weight = e.getValue().stream().mapToInt(i -> i.getWeight() != null ? i.getWeight() : 0).sum();
+            infoLabel.setText(count + " Barren ausgewählt, Gesamtgewicht: " + weight + " kg");
+        });
+
+        deliverDialog.add(content);
+
+        // Footer
+        Button cancelBtn = new Button("Abbrechen", e -> deliverDialog.close());
+
+        Button deliverBtn = new Button("Lieferschein erstellen", VaadinIcon.CHECK.create());
+        deliverBtn.addThemeVariants(ButtonVariant.LUMO_PRIMARY, ButtonVariant.LUMO_SUCCESS);
+        deliverBtn.addClickListener(e -> {
+            // Validierung
+            if (destinationField.isEmpty()) {
+                Notification.show("Bitte Lieferort angeben", 3000, Notification.Position.MIDDLE)
+                    .addThemeVariants(NotificationVariant.LUMO_WARNING);
+                destinationField.focus();
+                return;
+            }
+
+            var selectedIngots = selectGrid.asMultiSelect().getValue();
+            if (selectedIngots.isEmpty()) {
+                Notification.show("Bitte mindestens einen Barren auswählen", 3000, Notification.Position.MIDDLE)
+                    .addThemeVariants(NotificationVariant.LUMO_WARNING);
+                return;
+            }
+
+            try {
+                // Lieferschein erstellen
+                Shipment shipment = shipmentService.createShipment(
+                    orderNoField.getValue(),
+                    destinationField.getValue(),
+                    customerNoField.getValue(),
+                    addressField.getValue(),
+                    new java.util.ArrayList<>(selectedIngots)
+                );
+
+                // PDF generieren und Download
+                if (pdfService != null) {
+                    byte[] pdfContent = pdfService.generatePdf(shipment.getId());
+                    String fileName = "Lieferschein_" + shipment.getShipmentNumber() + ".pdf";
+                    StreamResource resource = new StreamResource(fileName,
+                        () -> new ByteArrayInputStream(pdfContent));
+                    resource.setContentType("application/pdf");
+
+                    Anchor downloadLink = new Anchor(resource, "");
+                    downloadLink.getElement().setAttribute("download", true);
+                    downloadLink.getStyle().set("display", "none");
+                    deliverDialog.add(downloadLink);
+
+                    downloadLink.getElement().executeJs(
+                        "const link = document.createElement('a');" +
+                        "link.href = $0.href;" +
+                        "link.download = $1;" +
+                        "document.body.appendChild(link);" +
+                        "link.click();" +
+                        "document.body.removeChild(link);",
+                        downloadLink.getElement(), fileName);
+                }
+
+                Notification.show("Lieferschein " + shipment.getShipmentNumber() + " erstellt für " +
+                    selectedIngots.size() + " Barren", 5000, Notification.Position.BOTTOM_CENTER)
+                    .addThemeVariants(NotificationVariant.LUMO_SUCCESS);
+
+                deliverDialog.close();
+
+                // Grids aktualisieren
+                loadIngotData();
+                if (onRelocated != null) {
+                    onRelocated.accept(null);
+                }
+
+            } catch (Exception ex) {
+                Notification.show("Fehler: " + ex.getMessage(), 5000, Notification.Position.MIDDLE)
+                    .addThemeVariants(NotificationVariant.LUMO_ERROR);
+                ex.printStackTrace();
+            }
+        });
+
+        HorizontalLayout footer = new HorizontalLayout(cancelBtn, deliverBtn);
+        footer.setJustifyContentMode(FlexComponent.JustifyContentMode.END);
+        deliverDialog.getFooter().add(footer);
+
+        deliverDialog.open();
     }
 }

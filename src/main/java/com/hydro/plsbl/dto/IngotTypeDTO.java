@@ -16,6 +16,7 @@ public class IngotTypeDTO {
     private Boolean externalAllowed;
     private Boolean retrievalAllowed;
     private Boolean autoRetrieval;
+    private Boolean sawToSwapout;
     private Integer minLength;
     private Integer maxLength;
     private Integer minWidth;
@@ -102,6 +103,14 @@ public class IngotTypeDTO {
 
     public void setAutoRetrieval(Boolean autoRetrieval) {
         this.autoRetrieval = autoRetrieval;
+    }
+
+    public Boolean getSawToSwapout() {
+        return sawToSwapout;
+    }
+
+    public void setSawToSwapout(Boolean sawToSwapout) {
+        this.sawToSwapout = sawToSwapout;
     }
 
     public Integer getMinLength() {

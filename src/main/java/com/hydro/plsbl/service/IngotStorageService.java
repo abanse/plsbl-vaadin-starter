@@ -48,6 +48,10 @@ public class IngotStorageService {
     private static final String YARD_TYPE_SAW = "S";
     // Interne Lagerplaetze
     private static final String YARD_TYPE_INTERNAL = "I";
+    // Externe Lagerplaetze
+    private static final String YARD_TYPE_EXTERNAL = "E";
+    // Ausgang/Swapout Lagerplaetze (Stapler-Abholplatz)
+    private static final String YARD_TYPE_SWAPOUT = "A";
     // Grenze fuer lange Barren in mm
     private static final int LONG_INGOT_THRESHOLD = 6000;
 
@@ -469,6 +473,10 @@ public class IngotStorageService {
      * 4. Fallback: AUTOMATIC Platz mit gleichem Produkt
      * 5. Fallback: Leerer AUTOMATIC Platz
      *
+     * Beruecksichtigt Barrentyp-Berechtigungen:
+     * - internalAllowed: Darf auf interne Plaetze (YARD_TYPE='I')
+     * - externalAllowed: Darf auf externe Plaetze (YARD_TYPE='E')
+     *
      * @param productId Produkt-ID
      * @param preferredYardNo Gewuenschte Platznummer (optional)
      * @param ingotLength Laenge des Barrens in mm - bestimmt ob SHORT oder LONG Platz
@@ -477,6 +485,11 @@ public class IngotStorageService {
         // Bestimme Barrentyp ueber IngotTypeService
         Optional<IngotTypeDTO> ingotType = ingotTypeService.determineIngotType(ingotLength, null, null, null, null);
         LengthType lengthType = ingotType.map(IngotTypeDTO::getLengthType).orElse(null);
+
+        // Berechtigungen aus Barrentyp ermitteln
+        boolean internalAllowed = ingotType.map(t -> Boolean.TRUE.equals(t.getInternalAllowed())).orElse(true);
+        boolean externalAllowed = ingotType.map(t -> Boolean.TRUE.equals(t.getExternalAllowed())).orElse(true);
+        boolean sawToSwapout = ingotType.map(t -> Boolean.TRUE.equals(t.getSawToSwapout())).orElse(false);
 
         // LengthType auf StockyardUsage mappen
         // MEDIUM hat kein direktes Mapping -> AUTOMATIC als Fallback
@@ -496,29 +509,81 @@ public class IngotStorageService {
         if (ingotType.isPresent()) {
             IngotTypeDTO type = ingotType.get();
             log.info("  Barrentyp: {} ({})", type.getName(), type.getLengthType() != null ? type.getLengthType().getDisplayName() : "?");
-            log.info("  Intern erlaubt: {}, Extern erlaubt: {}", type.getInternalAllowed(), type.getExternalAllowed());
+            log.info("  Intern erlaubt: {}, Extern erlaubt: {}, Säge->Ausgang: {}", internalAllowed, externalAllowed, sawToSwapout);
         } else {
             log.info("  Barrentyp: UNBEKANNT (Fallback: Grenze {}mm)", LONG_INGOT_THRESHOLD);
+            log.info("  Intern erlaubt: true (default), Extern erlaubt: true (default)");
         }
         log.info("  Ziel-Kategorie: {}", requiredUsage.getDisplayName());
         log.info("========================================");
+
+        // === SWAPOUT-LOGIK: Wenn sawToSwapout=true, zuerst Ausgang-Platz suchen ===
+        if (sawToSwapout) {
+            log.info("*** STAPLER-TRANSPORT ERFORDERLICH ***");
+            log.info("Barrentyp {} erfordert Stapler-Transport zu externem Lager", ingotType.map(IngotTypeDTO::getName).orElse("?"));
+            log.info("Suche freien Ausgang/Swapout-Platz (00/xx)...");
+
+            Optional<Stockyard> swapoutYard = findSwapoutYard();
+            if (swapoutYard.isPresent()) {
+                Stockyard yard = swapoutYard.get();
+                log.info("========================================");
+                log.info("ERGEBNIS: Ausgang-Platz fuer Stapler gefunden!");
+                log.info("  Lagerplatz: {} (ID={})", yard.getYardNumber(), yard.getId());
+                log.info("  Hinweis: Barren muss vom Stapler zu externem Platz gefahren werden");
+                log.info("========================================");
+                return swapoutYard;
+            } else {
+                log.warn("Kein freier Ausgang/Swapout-Platz verfuegbar!");
+                // Fallback: Wenn kein SWAPOUT frei und internalAllowed=false -> Fehler
+                if (!internalAllowed) {
+                    log.error("Barrentyp erlaubt keine internen Plaetze und kein Ausgang-Platz frei!");
+                    return Optional.empty();
+                }
+                log.info("Fallback: Suche internen Platz...");
+            }
+        }
 
         // 1. Gewuenschter Lagerplatz pruefen (muss exakt passen oder AUTOMATIC sein)
         if (preferredYardNo != null && !preferredYardNo.isBlank()) {
             Optional<Stockyard> preferred = stockyardRepository.findByYardNumber(preferredYardNo);
             if (preferred.isPresent() && isYardAvailable(preferred.get(), productId)
-                    && hasMatchingUsageStrict(preferred.get(), requiredUsage)) {
+                    && hasMatchingUsageStrict(preferred.get(), requiredUsage)
+                    && isYardTypeAllowed(preferred.get(), internalAllowed, externalAllowed)) {
                 log.debug("Gewuenschter Lagerplatz verfuegbar: {}", preferredYardNo);
                 return preferred;
             }
-            log.debug("Gewuenschter Lagerplatz {} nicht verfuegbar oder falsche Groesse", preferredYardNo);
+            log.debug("Gewuenschter Lagerplatz {} nicht verfuegbar oder falsche Groesse/Typ", preferredYardNo);
         }
 
-        // 2. Alle internen Lagerplaetze laden
-        List<Stockyard> internalYards = stockyardRepository.findByType(YARD_TYPE_INTERNAL);
+        // 2. Lagerplaetze nach Berechtigung laden
+        List<Stockyard> allowedYards = new java.util.ArrayList<>();
+
+        // Interne Plaetze laden (wenn erlaubt)
+        if (internalAllowed) {
+            List<Stockyard> internalYards = stockyardRepository.findByType(YARD_TYPE_INTERNAL);
+            allowedYards.addAll(internalYards);
+            log.info("  Interne Lagerplaetze geladen: {} Stueck", internalYards.size());
+        } else {
+            log.info("  Interne Lagerplaetze: NICHT ERLAUBT fuer diesen Barrentyp");
+        }
+
+        // Externe Plaetze laden (wenn erlaubt)
+        if (externalAllowed) {
+            List<Stockyard> externalYards = stockyardRepository.findByType(YARD_TYPE_EXTERNAL);
+            allowedYards.addAll(externalYards);
+            log.info("  Externe Lagerplaetze geladen: {} Stueck", externalYards.size());
+        } else {
+            log.info("  Externe Lagerplaetze: NICHT ERLAUBT fuer diesen Barrentyp");
+        }
+
+        if (allowedYards.isEmpty()) {
+            log.error("Keine erlaubten Lagerplaetze fuer Barrentyp! internalAllowed={}, externalAllowed={}",
+                internalAllowed, externalAllowed);
+            return Optional.empty();
+        }
 
         // Nach EXAKT passender Groesse filtern (SHORT oder LONG, NICHT AUTOMATIC)
-        List<Stockyard> exactMatchYards = internalYards.stream()
+        List<Stockyard> exactMatchYards = allowedYards.stream()
             .filter(yard -> hasExactUsage(yard, requiredUsage))
             .collect(Collectors.toList());
         log.info("  Gefundene {} Lagerplaetze: {} Stueck",
@@ -531,7 +596,7 @@ public class IngotStorageService {
         }
 
         // AUTOMATIC Plaetze als Fallback
-        List<Stockyard> automaticYards = internalYards.stream()
+        List<Stockyard> automaticYards = allowedYards.stream()
             .filter(yard -> yard.getUsage() == null || yard.getUsage() == StockyardUsage.AUTOMATIC)
             .collect(Collectors.toList());
         log.info("  AUTOMATIC Fallback-Plaetze: {} Stueck", automaticYards.size());
@@ -541,7 +606,8 @@ public class IngotStorageService {
         for (StockyardStatus status : productLocations) {
             Optional<Stockyard> yard = stockyardRepository.findById(status.getStockyardId());
             if (yard.isPresent() && isYardAvailable(yard.get(), productId)
-                    && hasExactUsage(yard.get(), requiredUsage)) {
+                    && hasExactUsage(yard.get(), requiredUsage)
+                    && isYardTypeAllowed(yard.get(), internalAllowed, externalAllowed)) {
                 log.info("Lagerplatz mit gleichem Produkt und EXAKT passender Groesse gefunden: {}",
                     yard.get().getYardNumber());
                 return yard;
@@ -554,6 +620,7 @@ public class IngotStorageService {
                 log.info("========================================");
                 log.info("ERGEBNIS: Leerer {} Platz gefunden!", requiredUsage.getDisplayName());
                 log.info("  Lagerplatz: {} (ID={})", yard.getYardNumber(), yard.getId());
+                log.info("  Typ: {}", yard.getType() != null ? yard.getType().getDisplayName() : "?");
                 log.info("  Position: X={}, Y={}, Z={}", yard.getXPosition(), yard.getYPosition(), yard.getZPosition());
                 log.info("========================================");
                 return Optional.of(yard);
@@ -567,6 +634,7 @@ public class IngotStorageService {
                 log.info("========================================");
                 log.info("ERGEBNIS: {} Platz mit Kapazitaet gefunden!", requiredUsage.getDisplayName());
                 log.info("  Lagerplatz: {} (ID={})", yard.getYardNumber(), yard.getId());
+                log.info("  Typ: {}", yard.getType() != null ? yard.getType().getDisplayName() : "?");
                 log.info("  Position: X={}, Y={}, Z={}", yard.getXPosition(), yard.getYPosition(), yard.getZPosition());
                 log.info("========================================");
                 return Optional.of(yard);
@@ -580,7 +648,8 @@ public class IngotStorageService {
         for (StockyardStatus status : productLocations) {
             Optional<Stockyard> yard = stockyardRepository.findById(status.getStockyardId());
             if (yard.isPresent() && isYardAvailable(yard.get(), productId)
-                    && (yard.get().getUsage() == null || yard.get().getUsage() == StockyardUsage.AUTOMATIC)) {
+                    && (yard.get().getUsage() == null || yard.get().getUsage() == StockyardUsage.AUTOMATIC)
+                    && isYardTypeAllowed(yard.get(), internalAllowed, externalAllowed)) {
                 log.info("AUTOMATIC Fallback mit gleichem Produkt gefunden: {}", yard.get().getYardNumber());
                 return yard;
             }
@@ -594,9 +663,52 @@ public class IngotStorageService {
             }
         }
 
-        log.warn("Kein geeigneter Lagerplatz fuer {} Barren ({}mm) gefunden!",
-            requiredUsage.getDisplayName(), ingotLength);
+        log.warn("Kein geeigneter Lagerplatz fuer {} Barren ({}mm) gefunden! internalAllowed={}, externalAllowed={}",
+            requiredUsage.getDisplayName(), ingotLength, internalAllowed, externalAllowed);
         return Optional.empty();
+    }
+
+    /**
+     * Findet einen freien Ausgang/Swapout-Platz (00/xx) fuer Stapler-Transport.
+     * Sucht nach Plaetzen mit YARD_TYPE='A' die leer sind.
+     *
+     * @return Ein freier Swapout-Platz oder empty
+     */
+    private Optional<Stockyard> findSwapoutYard() {
+        List<Stockyard> swapoutYards = stockyardRepository.findByType(YARD_TYPE_SWAPOUT);
+        log.info("  Gefundene Ausgang/Swapout-Plaetze: {} Stueck", swapoutYards.size());
+
+        // Sortiere nach Y-Koordinate (niedrigste zuerst = nahe am Tor)
+        swapoutYards.sort(Comparator.comparingInt(Stockyard::getYCoordinate));
+
+        for (Stockyard yard : swapoutYards) {
+            if (yard.isToStockAllowed() && isYardEmpty(yard.getId())) {
+                log.info("  Freier Ausgang-Platz gefunden: {}", yard.getYardNumber());
+                return Optional.of(yard);
+            }
+        }
+
+        log.info("  Alle Ausgang-Plaetze belegt!");
+        return Optional.empty();
+    }
+
+    /**
+     * Prueft ob ein Lagerplatz aufgrund seines Typs (intern/extern) erlaubt ist.
+     */
+    private boolean isYardTypeAllowed(Stockyard yard, boolean internalAllowed, boolean externalAllowed) {
+        if (yard.getType() == null) {
+            return true; // Unbekannter Typ - erlauben
+        }
+
+        switch (yard.getType()) {
+            case INTERNAL:
+                return internalAllowed;
+            case EXTERNAL:
+                return externalAllowed;
+            default:
+                // Andere Typen (SAW, LOADING, etc.) sind immer erlaubt
+                return true;
+        }
     }
 
     /**

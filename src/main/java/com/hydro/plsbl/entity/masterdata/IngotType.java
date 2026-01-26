@@ -43,6 +43,9 @@ public class IngotType {
     @Column("AUTO_RETRIEVAL")
     private Boolean autoRetrieval;
 
+    @Column("SAW_TO_SWAPOUT")
+    private Boolean sawToSwapout;
+
     @Column("MIN_LENGTH")
     private Integer minLength;
 
@@ -153,6 +156,14 @@ public class IngotType {
 
     public void setAutoRetrieval(Boolean autoRetrieval) {
         this.autoRetrieval = autoRetrieval;
+    }
+
+    public Boolean getSawToSwapout() {
+        return sawToSwapout;
+    }
+
+    public void setSawToSwapout(Boolean sawToSwapout) {
+        this.sawToSwapout = sawToSwapout;
     }
 
     public Integer getMinLength() {

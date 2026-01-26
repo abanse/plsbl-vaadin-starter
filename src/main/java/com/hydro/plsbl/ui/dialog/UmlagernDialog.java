@@ -112,6 +112,9 @@ public class UmlagernDialog extends Dialog {
         content.add(new H4("Umlagern-Modus"));
         content.add(createModeSelector());
 
+        // Ziele basierend auf initialem Modus laden
+        reloadDestinations();
+
         add(content);
     }
 
@@ -135,7 +138,10 @@ public class UmlagernDialog extends Dialog {
                 !MODE_CRANE.equals(item) || craneAvailable);
         }
 
-        modeSelector.addValueChangeListener(e -> updateModeInfo());
+        modeSelector.addValueChangeListener(e -> {
+            updateModeInfo();
+            reloadDestinations(); // Ziele neu laden bei Modus-Wechsel
+        });
 
         // Info-Label
         modeInfoLabel = new Span();
@@ -162,9 +168,48 @@ public class UmlagernDialog extends Dialog {
                 modeInfoLabel.getStyle().set("color", "#F44336");
             }
         } else {
-            modeInfoLabel.setText("Nur Datenbank-Änderung, kein Kran-Befehl.");
-            modeInfoLabel.getStyle().set("color", "gray");
+            modeInfoLabel.setText("Manuelle Umbuchung (inkl. externe Plätze) - kein Kran-Befehl.");
+            modeInfoLabel.getStyle().set("color", "#2196F3");
         }
+    }
+
+    /**
+     * Lädt die Ziel-Lagerplätze neu basierend auf dem gewählten Modus.
+     * Bei "Nur Datenbank" werden auch externe Plätze angezeigt.
+     */
+    private void reloadDestinations() {
+        if (destinationComboBox == null || modeSelector == null) return;
+
+        try {
+            String mode = modeSelector.getValue();
+            List<StockyardDTO> destinations;
+
+            if (MODE_DATABASE.equals(mode)) {
+                // Manuelle Umbuchung: ALLE Plätze inkl. externe
+                destinations = stockyardService.findAvailableDestinationsIncludingExternal();
+            } else {
+                // Kran-Umlagern: Nur Kran-erreichbare Plätze (ohne externe)
+                destinations = stockyardService.findAvailableDestinations();
+            }
+
+            // Quelle ausfiltern
+            destinations.removeIf(d -> d.getId().equals(sourceStockyard.getId()));
+            destinationComboBox.setItems(destinations);
+            destinationComboBox.clear(); // Auswahl zurücksetzen
+
+            if (destinations.isEmpty()) {
+                Notification.show("Keine verfügbaren Ziel-Lagerplätze gefunden",
+                    3000, Notification.Position.MIDDLE)
+                    .addThemeVariants(NotificationVariant.LUMO_WARNING);
+            }
+        } catch (Exception e) {
+            Notification.show("Fehler beim Laden der Ziele: " + e.getMessage(),
+                5000, Notification.Position.MIDDLE)
+                .addThemeVariants(NotificationVariant.LUMO_ERROR);
+            e.printStackTrace();
+        }
+
+        updateRelocateButton();
     }
 
     private Grid<IngotDTO> createIngotGrid() {
@@ -264,24 +309,8 @@ public class UmlagernDialog extends Dialog {
         destinationComboBox.setItemLabelGenerator(this::getStockyardLabel);
         destinationComboBox.setClearButtonVisible(true);
 
-        // Verfügbare Ziele laden (ohne Quelle)
-        try {
-            List<StockyardDTO> destinations = stockyardService.findAvailableDestinations();
-            // Quelle ausfiltern
-            destinations.removeIf(d -> d.getId().equals(sourceStockyard.getId()));
-            destinationComboBox.setItems(destinations);
-
-            if (destinations.isEmpty()) {
-                Notification.show("Keine verfügbaren Ziel-Lagerplätze gefunden",
-                    3000, Notification.Position.MIDDLE)
-                    .addThemeVariants(NotificationVariant.LUMO_WARNING);
-            }
-        } catch (Exception e) {
-            Notification.show("Fehler beim Laden der Ziele: " + e.getMessage(),
-                5000, Notification.Position.MIDDLE)
-                .addThemeVariants(NotificationVariant.LUMO_ERROR);
-            e.printStackTrace();
-        }
+        // Initiale Ziele werden erst nach Modus-Initialisierung geladen (in createContent)
+        // Hier nur Komponente erstellen, Daten werden später via reloadDestinations() geladen
 
         destinationComboBox.addValueChangeListener(e -> updateRelocateButton());
 

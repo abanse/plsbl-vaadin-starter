@@ -1,5 +1,8 @@
 package com.hydro.plsbl.dto;
 
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+
 /**
  * Suchkriterien für Abrufe (Calloff) - wie in der Original-Applikation
  */
@@ -7,12 +10,19 @@ public class CalloffSearchCriteria {
 
     private String calloffNumber;
     private String orderNumber;
+    private String orderPosition;
     private String customerNumber;
     private String destination;
+    private boolean noDestination;
     private String sapProductNumber;
-    private boolean incompleteOnly = true;  // Standard: Nur offene
-    private boolean approvedOnly;
-    private boolean notApprovedOnly;
+    private String productNumber;  // Artikel
+    private String searchPattern;  // Suchmuster
+    private LocalDateTime deliveryDateFrom;
+    private LocalDateTime deliveryDateTo;
+    private boolean incompleteOnly = true;  // nur offene Abrufe
+    private boolean completedOnly;          // nur erledigte Abrufe
+    private boolean approvedOnly;           // nur genehmigte Abrufe (für BeladungView)
+    private boolean notApprovedOnly;        // nur gesperrte Abrufe
 
     // === Getters & Setters ===
 
@@ -48,6 +58,14 @@ public class CalloffSearchCriteria {
         this.destination = destination;
     }
 
+    public String getOrderPosition() {
+        return orderPosition;
+    }
+
+    public void setOrderPosition(String orderPosition) {
+        this.orderPosition = orderPosition;
+    }
+
     public String getSapProductNumber() {
         return sapProductNumber;
     }
@@ -56,12 +74,60 @@ public class CalloffSearchCriteria {
         this.sapProductNumber = sapProductNumber;
     }
 
+    public String getProductNumber() {
+        return productNumber;
+    }
+
+    public void setProductNumber(String productNumber) {
+        this.productNumber = productNumber;
+    }
+
+    public String getSearchPattern() {
+        return searchPattern;
+    }
+
+    public void setSearchPattern(String searchPattern) {
+        this.searchPattern = searchPattern;
+    }
+
+    public LocalDateTime getDeliveryDateFrom() {
+        return deliveryDateFrom;
+    }
+
+    public void setDeliveryDateFrom(LocalDateTime deliveryDateFrom) {
+        this.deliveryDateFrom = deliveryDateFrom;
+    }
+
+    public LocalDateTime getDeliveryDateTo() {
+        return deliveryDateTo;
+    }
+
+    public void setDeliveryDateTo(LocalDateTime deliveryDateTo) {
+        this.deliveryDateTo = deliveryDateTo;
+    }
+
+    public boolean isNoDestination() {
+        return noDestination;
+    }
+
+    public void setNoDestination(boolean noDestination) {
+        this.noDestination = noDestination;
+    }
+
     public boolean isIncompleteOnly() {
         return incompleteOnly;
     }
 
     public void setIncompleteOnly(boolean incompleteOnly) {
         this.incompleteOnly = incompleteOnly;
+    }
+
+    public boolean isCompletedOnly() {
+        return completedOnly;
+    }
+
+    public void setCompletedOnly(boolean completedOnly) {
+        this.completedOnly = completedOnly;
     }
 
     public boolean isApprovedOnly() {
@@ -86,10 +152,17 @@ public class CalloffSearchCriteria {
     public boolean hasAnyCriteria() {
         return (calloffNumber != null && !calloffNumber.isEmpty())
             || (orderNumber != null && !orderNumber.isEmpty())
+            || (orderPosition != null && !orderPosition.isEmpty())
             || (customerNumber != null && !customerNumber.isEmpty())
             || (destination != null && !destination.isEmpty())
+            || noDestination
             || (sapProductNumber != null && !sapProductNumber.isEmpty())
+            || (productNumber != null && !productNumber.isEmpty())
+            || (searchPattern != null && !searchPattern.isEmpty())
+            || deliveryDateFrom != null
+            || deliveryDateTo != null
             || incompleteOnly
+            || completedOnly
             || approvedOnly
             || notApprovedOnly;
     }
@@ -100,10 +173,17 @@ public class CalloffSearchCriteria {
     public void reset() {
         calloffNumber = null;
         orderNumber = null;
+        orderPosition = null;
         customerNumber = null;
         destination = null;
+        noDestination = false;
         sapProductNumber = null;
+        productNumber = null;
+        searchPattern = null;
+        deliveryDateFrom = null;
+        deliveryDateTo = null;
         incompleteOnly = true;
+        completedOnly = false;
         approvedOnly = false;
         notApprovedOnly = false;
     }
@@ -113,11 +193,13 @@ public class CalloffSearchCriteria {
         return "CalloffSearchCriteria{" +
             "calloffNumber='" + calloffNumber + '\'' +
             ", orderNumber='" + orderNumber + '\'' +
+            ", orderPosition='" + orderPosition + '\'' +
             ", customerNumber='" + customerNumber + '\'' +
             ", destination='" + destination + '\'' +
             ", sapProductNumber='" + sapProductNumber + '\'' +
+            ", productNumber='" + productNumber + '\'' +
             ", incompleteOnly=" + incompleteOnly +
-            ", approvedOnly=" + approvedOnly +
+            ", completedOnly=" + completedOnly +
             ", notApprovedOnly=" + notApprovedOnly +
             '}';
     }

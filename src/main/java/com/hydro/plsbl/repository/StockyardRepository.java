@@ -64,10 +64,19 @@ public interface StockyardRepository extends CrudRepository<Stockyard, Long> {
     int countByType(@Param("type") String type);
 
     /**
-     * Findet alle Lagerplätze die als Ziel verfügbar sind (Einlagern erlaubt)
+     * Findet alle Lagerplätze die als Kran-Ziel verfügbar sind (Einlagern erlaubt)
+     * WICHTIG: Externe Plätze (YARD_TYPE='E') werden ausgeschlossen, da diese
+     * nicht vom Kran bedient werden - Stapler-Transport erforderlich!
      */
-    @Query("SELECT * FROM MD_STOCKYARD WHERE TO_STOCK_ALLOWED = TRUE ORDER BY YARD_NO")
+    @Query("SELECT * FROM MD_STOCKYARD WHERE TO_STOCK_ALLOWED = 1 AND YARD_TYPE != 'E' ORDER BY YARD_NO")
     List<Stockyard> findAvailableDestinations();
+
+    /**
+     * Findet alle Lagerplätze als Ziel für manuelle Umbuchung (ohne Kran)
+     * INKL. externe Plätze - für Stapler-Transport nach SWAPOUT
+     */
+    @Query("SELECT * FROM MD_STOCKYARD WHERE TO_STOCK_ALLOWED = 1 ORDER BY YARD_NO")
+    List<Stockyard> findAvailableDestinationsIncludingExternal();
 
     /**
      * Findet benachbarte kurze Lagerplätze für Merge-Operation.
