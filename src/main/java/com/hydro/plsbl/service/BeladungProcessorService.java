@@ -49,6 +49,7 @@ public class BeladungProcessorService {
     private final DataBroadcaster dataBroadcaster;
     private final ShipmentService shipmentService;
     private final CalloffService calloffService;
+    private final MessageService messageService;
 
     private ScheduledExecutorService executor;
     private ScheduledFuture<?> processorTask;
@@ -72,7 +73,8 @@ public class BeladungProcessorService {
                                      BeladungBroadcaster broadcaster,
                                      DataBroadcaster dataBroadcaster,
                                      ShipmentService shipmentService,
-                                     CalloffService calloffService) {
+                                     CalloffService calloffService,
+                                     MessageService messageService) {
         this.stateService = stateService;
         this.plcService = plcService;
         this.simulatorService = simulatorService;
@@ -82,6 +84,7 @@ public class BeladungProcessorService {
         this.dataBroadcaster = dataBroadcaster;
         this.shipmentService = shipmentService;
         this.calloffService = calloffService;
+        this.messageService = messageService;
     }
 
     @PreDestroy
@@ -170,9 +173,18 @@ public class BeladungProcessorService {
      */
     private void processBeladung() {
         try {
+            // Tür-Status prüfen und ggf. Alarme erzeugen
+            messageService.checkStatus();
+
             // Prüfen ob Beladung noch läuft
             if (!stateService.isBeladungLaeuft()) {
                 log.debug("Beladung nicht aktiv - überspringe");
+                return;
+            }
+
+            // Prüfen ob Kran-Operationen erlaubt sind (Alarme quittiert?)
+            if (!messageService.isCraneOperationAllowed()) {
+                log.debug("Kran-Operation blockiert - unquittierte Alarme!");
                 return;
             }
 

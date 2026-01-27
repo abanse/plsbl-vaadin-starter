@@ -45,6 +45,16 @@ public class CraneSimulatorService {
     private int simCount = 0;
     private int jobNumber = 0;
 
+    // Tür-/Tor-Status für Alarm-Simulation
+    private volatile boolean door1Open = false;
+    private volatile boolean door7Open = false;
+    private volatile boolean door10Open = false;
+    private volatile boolean gatesOpen = false;  // Tore 6 & 8
+    private volatile boolean doorsOpen = false;  // Türen 2,3,4,5,9
+
+    // Sicherheits-Pause: Kran stoppt bei offenen Türen
+    private volatile boolean paused = false;
+
     public CraneSimulatorService(CraneSimulatorConfig config) {
         this.config = config;
         reset();
@@ -141,6 +151,33 @@ public class CraneSimulatorService {
     }
 
     /**
+     * Pausiert den Kran (Sicherheitsstopp bei offenen Türen)
+     */
+    public void pause() {
+        if (!paused) {
+            paused = true;
+            log.warn("KRAN PAUSIERT - Sicherheitsstopp!");
+        }
+    }
+
+    /**
+     * Setzt den Kran fort (nach Quittierung und Tor geschlossen)
+     */
+    public void resume() {
+        if (paused) {
+            paused = false;
+            log.info("KRAN FORTGESETZT - Sicherheitsstopp aufgehoben");
+        }
+    }
+
+    /**
+     * Prüft ob der Kran pausiert ist
+     */
+    public boolean isPaused() {
+        return paused;
+    }
+
+    /**
      * Sendet einen Befehl an den Simulator
      */
     public synchronized void sendCommand(CraneSimulatorCommand command) {
@@ -218,21 +255,17 @@ public class CraneSimulatorService {
      */
     private void tick() {
         tickCounter++;
-        // Logge jeden 50. Tick um zu sehen ob Scheduler läuft (alle 5 Sekunden bei 100ms Intervall)
-        if (tickCounter % 50 == 0) {
-            log.info("TICK #{}: running={}, jobState={}, phase={}", tickCounter, running, jobState, workPhase);
+        // Logge jeden 100. Tick um zu sehen ob Scheduler läuft (alle 50 Sekunden bei 500ms Intervall)
+        if (tickCounter % 100 == 0) {
+            log.debug("TICK #{}: running={}, jobState={}, phase={}", tickCounter, running, jobState, workPhase);
         }
         try {
-            // Logge jeden Tick wenn Job aktiv
-            if (jobState != JobState.IDLE) {
-                log.info("TICK START #{}: pos=({},{},{}), phase={}, job={}, simCount={}",
-                    tickCounter, xPosition, yPosition, zPosition, workPhase, jobState, simCount);
+            // Logge jeden 10. Tick wenn Job aktiv (weniger Spam)
+            if (jobState != JobState.IDLE && tickCounter % 10 == 0) {
+                log.debug("TICK #{}: pos=({},{},{}), phase={}, job={}",
+                    tickCounter, xPosition, yPosition, zPosition, workPhase, jobState);
             }
             nextState();
-            if (jobState != JobState.IDLE) {
-                log.info("TICK END #{}: pos=({},{},{}), phase={}, job={}, simCount={}",
-                    tickCounter, xPosition, yPosition, zPosition, workPhase, jobState, simCount);
-            }
             updateDatabase();
         } catch (Exception e) {
             log.error("Simulator tick error at tick #{}", tickCounter, e);
@@ -244,6 +277,14 @@ public class CraneSimulatorService {
      */
     private synchronized void nextState() {
         if (!running) return;
+
+        // Bei Sicherheitspause keine Bewegung ausführen
+        if (paused) {
+            if (tickCounter % 20 == 0) {  // Alle 10 Sekunden loggen
+                log.debug("Kran pausiert - warte auf Quittierung und Tor-Schließung");
+            }
+            return;
+        }
 
         if (jobState == JobState.IDLE) {
             // Kein Auftrag - nichts zu tun
@@ -422,7 +463,8 @@ public class CraneSimulatorService {
             xPosition, yPosition, zPosition,
             craneMode, gripperState, jobState, workPhase,
             fromStockyardId, toStockyardId,
-            running
+            running, paused,
+            door1Open, door7Open, door10Open, gatesOpen, doorsOpen
         );
     }
 
@@ -439,6 +481,68 @@ public class CraneSimulatorService {
         WorkPhase workPhase,
         Long fromStockyardId,
         Long toStockyardId,
-        boolean running
-    ) {}
+        boolean running,
+        boolean paused,  // Sicherheitspause aktiv
+        // Tür-/Tor-Status
+        boolean door1Open,
+        boolean door7Open,
+        boolean door10Open,
+        boolean gatesOpen,
+        boolean doorsOpen
+    ) {
+        public boolean anyDoorOpen() {
+            return door1Open || door7Open || door10Open || gatesOpen || doorsOpen;
+        }
+    }
+
+    // === Tür-/Tor-Steuerung ===
+
+    public void setDoor1Open(boolean open) {
+        this.door1Open = open;
+        log.info("Tor 1: {}", open ? "OFFEN" : "geschlossen");
+    }
+
+    public void setDoor7Open(boolean open) {
+        this.door7Open = open;
+        log.info("Tor 7: {}", open ? "OFFEN" : "geschlossen");
+    }
+
+    public void setDoor10Open(boolean open) {
+        this.door10Open = open;
+        log.info("Tor 10: {}", open ? "OFFEN" : "geschlossen");
+    }
+
+    public void setGatesOpen(boolean open) {
+        this.gatesOpen = open;
+        log.info("Tore 6 & 8: {}", open ? "OFFEN" : "geschlossen");
+    }
+
+    public void setDoorsOpen(boolean open) {
+        this.doorsOpen = open;
+        log.info("Türen 2,3,4,5,9: {}", open ? "OFFEN" : "geschlossen");
+    }
+
+    public void toggleDoor(int doorNumber) {
+        switch (doorNumber) {
+            case 1 -> setDoor1Open(!door1Open);
+            case 7 -> setDoor7Open(!door7Open);
+            case 10 -> setDoor10Open(!door10Open);
+            case 6, 8 -> setGatesOpen(!gatesOpen);
+            default -> log.warn("Unbekannte Tür-Nummer: {}", doorNumber);
+        }
+    }
+
+    public boolean isDoorOpen(int doorNumber) {
+        return switch (doorNumber) {
+            case 1 -> door1Open;
+            case 7 -> door7Open;
+            case 10 -> door10Open;
+            case 6, 8 -> gatesOpen;
+            default -> false;
+        };
+    }
+
+    public boolean anyDoorOpen() {
+        return door1Open || door7Open || door10Open || gatesOpen || doorsOpen;
+    }
 }

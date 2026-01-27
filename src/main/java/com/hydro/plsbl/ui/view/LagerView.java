@@ -179,6 +179,10 @@ public class LagerView extends VerticalLayout {
                 if (event.getType() == BeladungBroadcaster.BeladungEventType.BELADUNG_ENDED && event.hasShipment()) {
                     log.info(">>> BELADUNG BEENDET - Zeige Lieferschein-Notification: {}", event.getShipmentNumber());
                     showLieferscheinNotification(event.getShipmentId(), event.getShipmentNumber(), event.getGeladeneCount());
+
+                    // Trailer-Anzeige zurücksetzen (Vorgang abgeschlossen)
+                    lagerGrid.updateTrailerLoad(0, 0, false);
+                    updateBeladungStatusDisplay(0, 0, false);
                 }
             });
         });
@@ -452,6 +456,9 @@ public class LagerView extends VerticalLayout {
             UI.getCurrent().navigate(BeladungView.class);
         });
 
+        // Click-Handler für Tore (Simulator-Test)
+        lagerGrid.setGateClickListener(this::onGateClicked);
+
         // Container mit Scroll
         Div container = new Div(lagerGrid);
         container.setSizeFull();
@@ -460,9 +467,30 @@ public class LagerView extends VerticalLayout {
             .set("border", "1px solid #e0e0e0")
             .set("border-radius", "4px")
             .set("background-color", "#fafafa");
-        
+
         add(container);
         setFlexGrow(1, container);
+    }
+
+    /**
+     * Handler für Tor-Klicks - togglet Tor im Simulator-Modus
+     */
+    private void onGateClicked(int gateNumber) {
+        if (!simulatorService.isRunning()) {
+            Notification.show("Tor-Test nur im Simulator-Modus verfuegbar", 2000, Notification.Position.BOTTOM_CENTER);
+            return;
+        }
+
+        // Tor im Simulator umschalten
+        simulatorService.toggleDoor(gateNumber);
+        boolean isOpen = simulatorService.isDoorOpen(gateNumber);
+
+        // UI aktualisieren
+        lagerGrid.setGateOpen(gateNumber, isOpen);
+
+        String status = isOpen ? "OFFEN" : "geschlossen";
+        Notification.show("Tor " + gateNumber + " ist jetzt " + status, 1500, Notification.Position.BOTTOM_CENTER);
+        log.info("Tor {} auf {} gesetzt (Simulator-Test)", gateNumber, status);
     }
     
     private void createLegend() {
@@ -1212,6 +1240,12 @@ public class LagerView extends VerticalLayout {
         }
 
         if (lagerGrid == null) return;
+
+        // Tor-Status aktualisieren (Simulator)
+        lagerGrid.updateGateStatus(
+            simStatus.door1Open(), simStatus.door7Open(), simStatus.door10Open(),
+            simStatus.gatesOpen(), simStatus.doorsOpen()
+        );
 
         int xMm = simStatus.xPosition();
         int yMm = simStatus.yPosition();

@@ -34,7 +34,11 @@ public class LagerGrid extends Div {
     private Map<Long, StockyardDTO> allStockyardsMap = new HashMap<>();  // Alle Stockyards inkl. versteckter
     private Consumer<StockyardDTO> clickListener;
     private Runnable trailerClickListener;
+    private Consumer<Integer> gateClickListener;  // Listener für Tor-Klicks
     private SettingsService settingsService;
+
+    // Tor-Referenzen für dynamische Updates
+    private final Map<Integer, Div> gateMap = new HashMap<>();
 
     // Trailer-Referenzen für dynamische Updates
     private Div trailerContainer;
@@ -771,12 +775,13 @@ public class LagerGrid extends Div {
     private Div createNumberedGate(int number, String beschreibung) {
         Div gate = new Div();
         gate.getStyle()
-            .set("background-color", "#4CAF50") // Grün
+            .set("background-color", "#4CAF50") // Grün = geschlossen
             .set("border-radius", "2px")
             .set("display", "flex")
             .set("align-items", "center")
             .set("justify-content", "center")
-            .set("position", "relative");
+            .set("position", "relative")
+            .set("cursor", "pointer");
 
         Span label = new Span("T" + number);
         label.getStyle()
@@ -786,8 +791,54 @@ public class LagerGrid extends Div {
             .set("text-shadow", "0 0 2px black");
         gate.add(label);
 
-        gate.getElement().setAttribute("title", "Tor " + number + ": " + beschreibung);
+        gate.getElement().setAttribute("title", "Tor " + number + ": " + beschreibung + " (Klick zum Testen)");
+
+        // Click-Handler für Simulator-Test
+        gate.addClickListener(e -> {
+            if (gateClickListener != null) {
+                gateClickListener.accept(number);
+            }
+        });
+
+        // Speichern für späteren Zugriff
+        gateMap.put(number, gate);
+
         return gate;
+    }
+
+    /**
+     * Setzt den Listener für Tor-Klicks
+     */
+    public void setGateClickListener(Consumer<Integer> listener) {
+        this.gateClickListener = listener;
+    }
+
+    /**
+     * Aktualisiert die Farbe eines Tors (grün = zu, rot = offen)
+     */
+    public void setGateOpen(int gateNumber, boolean open) {
+        Div gate = gateMap.get(gateNumber);
+        if (gate != null) {
+            gate.getStyle().set("background-color", open ? "#d32f2f" : "#4CAF50");
+        }
+    }
+
+    /**
+     * Aktualisiert alle Tore basierend auf Status
+     */
+    public void updateGateStatus(boolean door1Open, boolean door7Open, boolean door10Open,
+                                  boolean gates68Open, boolean otherDoorsOpen) {
+        setGateOpen(1, door1Open);
+        setGateOpen(7, door7Open);
+        setGateOpen(10, door10Open);
+        setGateOpen(6, gates68Open);
+        setGateOpen(8, gates68Open);
+        // Tore 2-5, 9 für "andere Türen"
+        setGateOpen(2, otherDoorsOpen);
+        setGateOpen(3, otherDoorsOpen);
+        setGateOpen(4, otherDoorsOpen);
+        setGateOpen(5, otherDoorsOpen);
+        setGateOpen(9, otherDoorsOpen);
     }
 
     /**
@@ -1269,7 +1320,17 @@ public class LagerGrid extends Div {
      * - Reihen 5-14 (Y=10 bis Y=1): je 38px = 380px total
      */
     private void updateCranePixelPosition() {
-        if (craneOverlay == null) return;
+        if (craneOverlay == null) {
+            log.warn("updateCranePixelPosition: craneOverlay ist null!");
+            return;
+        }
+
+        // Prüfen ob craneOverlay noch am UI angehängt ist
+        if (!craneOverlay.isAttached()) {
+            log.warn("updateCranePixelPosition: craneOverlay ist NICHT attached! Element-ID might be stale.");
+            // Versuche das Element neu zu finden
+            return;
+        }
 
         // === MM-KOORDINATEN DER REFERENZPUNKTE (aus Datenbank) ===
         final int MM_X_17 = 96740;     // X=17 (links im UI)
@@ -1317,7 +1378,7 @@ public class LagerGrid extends Div {
         if (craneMmX < 12000 && craneMmY > 35500) {
             pixelX = PIXEL_SAW_X;
             pixelY = PIXEL_SAW_Y;
-            log.info("Crane at SAW position: mm({},{}) -> pixel({},{})", craneMmX, craneMmY, pixelX, pixelY);
+            log.debug("Crane at SAW position: mm({},{}) -> pixel({},{})", craneMmX, craneMmY, pixelX, pixelY);
         }
         // === SONDERFALL: SWAPOUT-BEREICH (00/01-00/08) ===
         // Wenn Kran bei SWAPOUT-X (ca. 9440) und Y im normalen Bereich
@@ -1331,7 +1392,29 @@ public class LagerGrid extends Div {
             final int PIXEL_SWAPOUT_Y_TOP = 180;    // 00/08 (oben)
             final int PIXEL_SWAPOUT_Y_BOTTOM = 460; // 00/01 (unten)
             pixelY = PIXEL_SWAPOUT_Y_TOP + (int)(ratioY * (PIXEL_SWAPOUT_Y_BOTTOM - PIXEL_SWAPOUT_Y_TOP)) + PIXEL_Y_OFFSET;
-            log.info("Crane at SWAPOUT position: mm({},{}) -> pixel({},{})", craneMmX, craneMmY, pixelX, pixelY);
+            log.debug("Crane at SWAPOUT position: mm({},{}) -> pixel({},{})", craneMmX, craneMmY, pixelX, pixelY);
+        }
+        // === SONDERFALL: TRAILER/BELADUNGS-BEREICH ===
+        // Wenn Kran UNTER dem Grid (Y < 6000mm) und X im Beladungsbereich (30000-50000)
+        // Der Trailer ist visuell im L-Ausschnitt rechts unten (Spalten 14-17, Reihen 17-20)
+        // Das ist UNTERHALB der normalen Lagerplätze
+        else if (craneMmY < 6000 && craneMmX >= 30000 && craneMmX <= 50000) {
+            // Beladungsfläche: CSS grid-column 14-17, grid-row 17-20
+            // Spalten 14-17 entsprechen X=7 bis X=4 (Mitte bei etwa 1002px)
+            // Reihen 17-20 sind unterhalb von Y=1 (ab etwa 546px)
+            // Der Trailer ist in der Mitte der Beladungsfläche, etwas nach unten versetzt
+            //
+            // Pixel-Berechnung:
+            // - Column 14 center (X=7): 105 + 10*78 = 885px
+            // - Column 17 center (X=4): 105 + 13*78 = 1119px
+            // - Center: (885+1119)/2 = 1002px
+            // - Row 17 start: ~546px, Row 20 end: ~640px, Center: ~593px
+            // - Trailer hat margin-top: 20px, also etwas tiefer: ~620px
+            final int PIXEL_TRAILER_X = 1000;   // Mitte der Beladungsfläche (Spalten 14-17)
+            final int PIXEL_TRAILER_Y = 620;    // Mitte des Trailers (unterhalb des Grids)
+            pixelX = PIXEL_TRAILER_X;
+            pixelY = PIXEL_TRAILER_Y;  // Kein zusätzlicher Offset nötig
+            log.debug("Crane at TRAILER position: mm({},{}) -> pixel({},{})", craneMmX, craneMmY, pixelX, pixelY);
         } else {
             // === NORMALE LINEARE INTERPOLATION ===
             // X: Hohe mm-Werte (96740) -> niedrige Pixel, niedrige mm-Werte (16740) -> hohe Pixel
@@ -1356,11 +1439,8 @@ public class LagerGrid extends Div {
             if (expectedYCoord < 1) expectedYCoord = 1;
             if (expectedYCoord > 10) expectedYCoord = 10;
 
-            log.info("=== CRANE PIXEL DEBUG ===");
-            log.info("Crane mm: X={}, Y={}", craneMmX, craneMmY);
-            log.info("Ratio: X={}, Y={}", String.format("%.4f", ratioX), String.format("%.4f", ratioY));
-            log.info("Pixel center (vor Offset): X={}, Y={}", pixelX, pixelY);
-            log.info("Erwarteter Lagerplatz: {}/{} (berechnet aus mm)",
+            log.trace("Crane mm: X={}, Y={} -> Pixel: X={}, Y={} -> Lagerplatz: {}/{}",
+                craneMmX, craneMmY, pixelX, pixelY,
                 String.format("%02d", expectedXCoord), String.format("%02d", expectedYCoord));
 
             // === LONG STOCKYARD KORREKTUR ===
@@ -1386,16 +1466,14 @@ public class LagerGrid extends Div {
                 int pixelPerRow = (PIXEL_Y_01 - PIXEL_Y_10) / 9;
                 int longCenterPixelY = PIXEL_Y_10 + (10 - longY) * pixelPerRow;
 
-                log.info("LONG STOCKYARD KORREKTUR: {} deckt Position {}/{} ab",
+                log.trace("LONG {} deckt {}/{} ab, Pixel: ({},{}) -> ({},{})",
                     longYard.getYardNumber(),
-                    String.format("%02d", expectedXCoord), String.format("%02d", expectedYCoord));
-                log.info("Pixel X angepasst: {} -> {} (Mitte von LONG)", pixelX, longCenterPixelX);
-                log.info("Pixel Y angepasst: {} -> {} (Zellenmitte Y={})", pixelY, longCenterPixelY, longY);
+                    String.format("%02d", expectedXCoord), String.format("%02d", expectedYCoord),
+                    pixelX, pixelY, longCenterPixelX, longCenterPixelY);
 
                 pixelX = longCenterPixelX;
                 pixelY = longCenterPixelY;
             }
-            log.info("=========================");
         }
 
         // Kran-Größe berücksichtigen (zentrieren)
@@ -1407,13 +1485,41 @@ public class LagerGrid extends Div {
         pixelX -= craneSize / 2;
         pixelY -= craneSize / 2;
 
-        log.info("Crane position: center=({},{}) -> left/top=({},{}) [craneSize={}]",
-            centerPixelX, centerPixelY, pixelX, pixelY, craneSize);
+        log.trace("Crane position: center=({},{}) -> left/top=({},{})",
+            centerPixelX, centerPixelY, pixelX, pixelY);
 
-        // Position setzen
-        craneOverlay.getStyle()
-            .set("left", pixelX + "px")
-            .set("top", pixelY + "px");
+        // Position setzen - BEIDE Methoden verwenden für Diagnose
+        final int finalPixelX = pixelX;
+        final int finalPixelY = pixelY;
+
+        // DIAGNOSE: Farbe wechseln um zu sehen ob Element erreicht wird
+        // Wechselt zwischen zwei Grüntönen bei jedem Update
+        long tick = System.currentTimeMillis() / 200;  // Alle 200ms wechseln
+        String borderColor = (tick % 2 == 0) ? "#00FF00" : "#00AA00";
+        craneOverlay.getStyle().set("border-color", borderColor);
+
+        // Methode 1: Vaadin Style API (normale Synchronisation)
+        craneOverlay.getStyle().set("left", finalPixelX + "px");
+        craneOverlay.getStyle().set("top", finalPixelY + "px");
+
+        // Methode 2: Forciertes DOM-Update via setAttribute
+        craneOverlay.getElement().setAttribute("data-x", String.valueOf(finalPixelX));
+        craneOverlay.getElement().setAttribute("data-y", String.valueOf(finalPixelY));
+
+        // Methode 3: ExecuteJs als Backup (mit Logging)
+        craneOverlay.getElement().executeJs(
+            "if(this.style.left !== $0 + 'px' || this.style.top !== $1 + 'px') {" +
+            "  this.style.left = $0 + 'px'; this.style.top = $1 + 'px';" +
+            "  console.log('CRANE FORCED UPDATE: ' + $0 + ',' + $1);" +
+            "}",
+            finalPixelX, finalPixelY
+        );
+
+        // Debug: Alle 5 Sekunden loggen
+        if (System.currentTimeMillis() % 5000 < 200) {
+            log.info(">>> LAGERGRID Position: pixel({},{}) für mm({},{}), attached={}",
+                finalPixelX, finalPixelY, craneMmX, craneMmY, craneOverlay.isAttached());
+        }
     }
 
     /**

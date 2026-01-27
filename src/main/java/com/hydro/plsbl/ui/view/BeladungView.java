@@ -218,13 +218,33 @@ public class BeladungView extends VerticalLayout {
                         if (ui.isAttached()) {
                             ui.access(() -> {
                                 log.info(">>> BELADUNG_ENDED Event empfangen - Zeige Lieferschein: {}", event.getShipmentNumber());
+
                                 // Lokalen Status zurücksetzen
                                 beladungLaeuft = false;
+                                beladungAktiv = false;
+                                kranKommandoGesendet = false;
                                 if (beladungsTask != null) {
                                     beladungsTask.cancel(false);
                                     beladungsTask = null;
                                 }
+
+                                // Barren-Listen leeren (Vorgang abgeschlossen)
+                                geplanteBarren.clear();
+                                geladeneBarren.clear();
+                                selectedCalloff = null;
+
+                                // StateService zurücksetzen
+                                stateService.reset();
+
+                                // UI aktualisieren
+                                updateLadeflaeche();
+                                updateAnzeigen();
+                                updateTransportGrid();
+                                beladungsNrField.clear();
+                                startenBtn.setEnabled(false);
                                 pauseBtn.setEnabled(false);
+
+                                log.info(">>> Beladung abgeschlossen - View zurückgesetzt");
 
                                 // Lieferschein-Dialog öffnen
                                 openLieferscheinDialogById(event.getShipmentId(), event.getShipmentNumber());

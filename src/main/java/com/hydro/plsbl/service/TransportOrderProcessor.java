@@ -44,6 +44,7 @@ public class TransportOrderProcessor {
     private final IngotService ingotService;
     private final PlcService plcService;
     private final DataBroadcaster dataBroadcaster;
+    private final MessageService messageService;
 
     // Aktueller Auftrag in Bearbeitung
     private final AtomicReference<TransportOrderDTO> currentOrder = new AtomicReference<>();
@@ -60,12 +61,14 @@ public class TransportOrderProcessor {
                                    StockyardService stockyardService,
                                    IngotService ingotService,
                                    PlcService plcService,
-                                   DataBroadcaster dataBroadcaster) {
+                                   DataBroadcaster dataBroadcaster,
+                                   MessageService messageService) {
         this.orderService = orderService;
         this.stockyardService = stockyardService;
         this.ingotService = ingotService;
         this.plcService = plcService;
         this.dataBroadcaster = dataBroadcaster;
+        this.messageService = messageService;
 
         // PlcService Status-Listener für Fortschritts-Tracking
         plcService.addStatusListener(this::onPlcStatusUpdate);
@@ -175,12 +178,20 @@ public class TransportOrderProcessor {
      */
     @Scheduled(fixedDelay = 2000)
     public void checkForPendingOrders() {
+        // Tür-Status prüfen und ggf. Alarme erzeugen
+        messageService.checkStatus();
+
         if (!autoProcessingEnabled.get()) {
             return;
         }
 
         if (processing.get()) {
             return; // Bereits ein Auftrag in Bearbeitung
+        }
+
+        // Prüfen ob Kran-Operationen erlaubt sind (Alarme quittiert?)
+        if (!messageService.isCraneOperationAllowed()) {
+            return; // Alarme nicht quittiert - keine neuen Aufträge starten
         }
 
         if (!plcService.isConnected() && !plcService.isSimulatorMode()) {
