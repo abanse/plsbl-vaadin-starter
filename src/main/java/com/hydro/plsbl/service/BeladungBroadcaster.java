@@ -61,6 +61,16 @@ public class BeladungBroadcaster {
     }
 
     /**
+     * Convenience-Methode: Broadcast dass Beladung beendet wurde MIT Lieferschein
+     */
+    public void broadcastBeladungEndedWithShipment(int geladeneCount, Long shipmentId, String shipmentNumber) {
+        BeladungEvent event = new BeladungEvent(BeladungEventType.BELADUNG_ENDED, geladeneCount, geladeneCount, false);
+        event.setShipmentId(shipmentId);
+        event.setShipmentNumber(shipmentNumber);
+        broadcast(event);
+    }
+
+    /**
      * Event-Typen für Beladungs-Broadcasts
      */
     public enum BeladungEventType {
@@ -77,6 +87,8 @@ public class BeladungBroadcaster {
         private final int geladeneCount;
         private final int totalCount;
         private final boolean isLoading;
+        private Long shipmentId;
+        private String shipmentNumber;
 
         public BeladungEvent(BeladungEventType type, int geladeneCount, int totalCount, boolean isLoading) {
             this.type = type;
@@ -99,6 +111,26 @@ public class BeladungBroadcaster {
 
         public boolean isLoading() {
             return isLoading;
+        }
+
+        public Long getShipmentId() {
+            return shipmentId;
+        }
+
+        public void setShipmentId(Long shipmentId) {
+            this.shipmentId = shipmentId;
+        }
+
+        public String getShipmentNumber() {
+            return shipmentNumber;
+        }
+
+        public void setShipmentNumber(String shipmentNumber) {
+            this.shipmentNumber = shipmentNumber;
+        }
+
+        public boolean hasShipment() {
+            return shipmentId != null;
         }
     }
 }

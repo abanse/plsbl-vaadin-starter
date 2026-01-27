@@ -10,6 +10,7 @@ import com.hydro.plsbl.plc.dto.JobState;
 import com.hydro.plsbl.dto.DeliveryNoteDTO;
 import com.hydro.plsbl.entity.transdata.Shipment;
 import com.hydro.plsbl.service.BeladungBroadcaster;
+import com.hydro.plsbl.service.BeladungProcessorService;
 import com.hydro.plsbl.service.BeladungStateService;
 import com.hydro.plsbl.service.CalloffService;
 import com.hydro.plsbl.service.DataBroadcaster;
@@ -83,11 +84,16 @@ public class BeladungView extends VerticalLayout {
     private final DataBroadcaster dataBroadcaster;
     private final ShipmentService shipmentService;
     private final LieferscheinPdfService pdfService;
+    private final BeladungProcessorService processorService;
     private com.vaadin.flow.shared.Registration dataBroadcasterRegistration;
+    private com.vaadin.flow.shared.Registration beladungBroadcasterRegistration;
 
     // Trailer-Position (in mm)
-    private static final int TRAILER_X = 45000;
-    private static final int TRAILER_Y = 9000;
+    // Die Trailer-Beladungsposition liegt UNTERHALB des Lager-Grids
+    // X: zwischen Position 04-07 (ca. 31000-47000 mm), Y: UNTER Y=1 (6270mm)
+    // Diese Koordinaten werden in LagerGrid.updateCranePixelPosition() speziell behandelt
+    private static final int TRAILER_X = 40000;   // Mitte der Beladungsfläche (zwischen 04-07)
+    private static final int TRAILER_Y = 2000;    // UNTER dem Grid (Y=1 ist bei 6270mm)
     private static final int TRAILER_Z = 2000;
 
     // Filter-Felder (Zeile 1)
@@ -151,7 +157,8 @@ public class BeladungView extends VerticalLayout {
                         BeladungBroadcaster broadcaster,
                         DataBroadcaster dataBroadcaster,
                         ShipmentService shipmentService,
-                        LieferscheinPdfService pdfService) {
+                        LieferscheinPdfService pdfService,
+                        BeladungProcessorService processorService) {
         this.ingotService = ingotService;
         this.stockyardService = stockyardService;
         this.transportOrderService = transportOrderService;
@@ -163,6 +170,7 @@ public class BeladungView extends VerticalLayout {
         this.dataBroadcaster = dataBroadcaster;
         this.shipmentService = shipmentService;
         this.pdfService = pdfService;
+        this.processorService = processorService;
 
         setSizeFull();
         setPadding(true);
@@ -181,12 +189,51 @@ public class BeladungView extends VerticalLayout {
     @Override
     protected void onAttach(AttachEvent attachEvent) {
         super.onAttach(attachEvent);
-        scheduler = Executors.newSingleThreadScheduledExecutor();
+        scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "BeladungView-Scheduler");
+            t.setDaemon(true);
+            return t;
+        });
 
         dataBroadcasterRegistration = dataBroadcaster.register(event -> {
             if (event.getType() == DataBroadcaster.DataEventType.CALLOFF_CHANGED ||
                 event.getType() == DataBroadcaster.DataEventType.REFRESH_ALL) {
-                getUI().ifPresent(ui -> ui.access(this::loadData));
+                getUI().ifPresent(ui -> {
+                    try {
+                        if (ui.isAttached()) {
+                            ui.access(this::loadData);
+                        }
+                    } catch (Exception e) {
+                        log.debug("Could not access UI: {}", e.getMessage());
+                    }
+                });
+            }
+        });
+
+        // Für BELADUNG_ENDED Events registrieren (Lieferschein-Dialog)
+        beladungBroadcasterRegistration = broadcaster.register(event -> {
+            if (event.getType() == BeladungBroadcaster.BeladungEventType.BELADUNG_ENDED && event.hasShipment()) {
+                getUI().ifPresent(ui -> {
+                    try {
+                        if (ui.isAttached()) {
+                            ui.access(() -> {
+                                log.info(">>> BELADUNG_ENDED Event empfangen - Zeige Lieferschein: {}", event.getShipmentNumber());
+                                // Lokalen Status zurücksetzen
+                                beladungLaeuft = false;
+                                if (beladungsTask != null) {
+                                    beladungsTask.cancel(false);
+                                    beladungsTask = null;
+                                }
+                                pauseBtn.setEnabled(false);
+
+                                // Lieferschein-Dialog öffnen
+                                openLieferscheinDialogById(event.getShipmentId(), event.getShipmentNumber());
+                            });
+                        }
+                    } catch (Exception e) {
+                        log.error("Fehler bei BELADUNG_ENDED Event: {}", e.getMessage());
+                    }
+                });
             }
         });
 
@@ -195,21 +242,35 @@ public class BeladungView extends VerticalLayout {
 
     @Override
     protected void onDetach(DetachEvent detachEvent) {
-        super.onDetach(detachEvent);
+        log.info("=== BELADUNG VIEW DETACH ===");
+        log.info("  beladungLaeuft={}, kranKommandoGesendet={}", beladungLaeuft, kranKommandoGesendet);
+        log.info("  geplanteBarren={}, geladeneBarren={}", geplanteBarren.size(), geladeneBarren.size());
+
+        // Zuerst State speichern
         saveStateToService();
 
+        // Dann Broadcaster abmelden
         if (dataBroadcasterRegistration != null) {
             dataBroadcasterRegistration.remove();
             dataBroadcasterRegistration = null;
         }
+        if (beladungBroadcasterRegistration != null) {
+            beladungBroadcasterRegistration.remove();
+            beladungBroadcasterRegistration = null;
+        }
 
+        // Dann Tasks stoppen
         if (beladungsTask != null) {
+            log.info("  >>> STOPPE BELADUNGS-SCHEDULER");
             beladungsTask.cancel(false);
             beladungsTask = null;
         }
         if (scheduler != null) {
             scheduler.shutdownNow();
+            scheduler = null;
         }
+
+        super.onDetach(detachEvent);
     }
 
     /**
@@ -792,14 +853,19 @@ public class BeladungView extends VerticalLayout {
         startenBtn.setEnabled(false);
         pauseBtn.setEnabled(true);
 
-        // Erstes Kommando senden
-        if (!geplanteBarren.isEmpty()) {
-            IngotDTO ersterBarren = geplanteBarren.get(0);
-            sendeCranKommando(ersterBarren);
-            kranKommandoGesendet = true;
-        }
+        // Status speichern BEVOR der Processor gestartet wird
+        saveStateToService();
 
-        beladungsTask = scheduler.scheduleAtFixedRate(this::pollBeladungStatus, 500, 500, TimeUnit.MILLISECONDS);
+        // Calloff-Info an Processor übergeben für Lieferschein-Erstellung
+        String destination = lieferortCombo.getValue();
+        processorService.setCalloffInfo(selectedCalloff, destination);
+
+        // Hintergrund-Processor starten (läuft auch bei View-Wechsel weiter!)
+        log.info("=== STARTE BELADUNG MIT HINTERGRUND-PROCESSOR ===");
+        processorService.start();
+
+        // UI-Update Scheduler starten (nur für lokale UI-Updates)
+        beladungsTask = scheduler.scheduleAtFixedRate(this::pollUIStatus, 500, 500, TimeUnit.MILLISECONDS);
 
         Notification.show("Beladung gestartet", 2000, Notification.Position.BOTTOM_CENTER);
     }
@@ -815,43 +881,67 @@ public class BeladungView extends VerticalLayout {
     }
 
     private void pollBeladungStatus() {
-        if (!beladungLaeuft) return;
+        // WICHTIG: Gesamte Methode in try-catch wrappen!
+        // ScheduledExecutorService stoppt den Task bei uncaught Exceptions!
+        try {
+            if (!beladungLaeuft) {
+                return;
+            }
 
-        var plcStatus = plcService.getCurrentStatus();
-        final JobState jobState = plcStatus != null ? plcStatus.getJobState() : null;
+            var plcStatus = plcService.getCurrentStatus();
+            final JobState jobState = plcStatus != null ? plcStatus.getJobState() : null;
 
-        getUI().ifPresent(ui -> {
-            if (!ui.isAttached()) return;
+            // Nur alle 10 Aufrufe loggen um Spam zu reduzieren
+            if (System.currentTimeMillis() % 5000 < 500) {
+                log.debug("pollBeladungStatus: jobState={}, kranKommandoGesendet={}, geplant={}, geladen={}",
+                    jobState, kranKommandoGesendet, geplanteBarren.size(), geladeneBarren.size());
+            }
 
-            ui.access(() -> {
+            getUI().ifPresent(ui -> {
                 try {
-                    if (jobState == JobState.IDLE && kranKommandoGesendet) {
-                        if (!geplanteBarren.isEmpty()) {
-                            IngotDTO barren = geplanteBarren.remove(0);
-                            geladeneBarren.add(barren);
-                            kranKommandoGesendet = false;
-                            saveStateToService();
-
-                            updateLadeflaeche();
-                            updateAnzeigen();
-                            updateTransportGrid();
-                            broadcastStatus();
-
-                            if (!geplanteBarren.isEmpty()) {
-                                IngotDTO naechsterBarren = geplanteBarren.get(0);
-                                sendeCranKommando(naechsterBarren);
-                                kranKommandoGesendet = true;
-                            } else {
-                                beladungFertig();
-                            }
-                        }
+                    if (!ui.isAttached()) {
+                        return;
                     }
-                    ui.push();
+
+                    ui.access(() -> {
+                        try {
+                            if (jobState == JobState.IDLE && kranKommandoGesendet) {
+                                log.info(">>> Kran IDLE erkannt! Verarbeite abgelegten Barren...");
+                                if (!geplanteBarren.isEmpty()) {
+                                    IngotDTO barren = geplanteBarren.remove(0);
+                                    geladeneBarren.add(barren);
+                                    kranKommandoGesendet = false;
+                                    saveStateToService();
+                                    log.info(">>> Barren {} als geladen markiert", barren.getIngotNo());
+
+                                    updateLadeflaeche();
+                                    updateAnzeigen();
+                                    updateTransportGrid();
+                                    broadcastStatus();
+
+                                    if (!geplanteBarren.isEmpty()) {
+                                        IngotDTO naechsterBarren = geplanteBarren.get(0);
+                                        log.info(">>> Sende Kommando für nächsten Barren: {}", naechsterBarren.getIngotNo());
+                                        sendeCranKommando(naechsterBarren);
+                                        kranKommandoGesendet = true;
+                                    } else {
+                                        log.info(">>> Alle Barren geladen - beladungFertig()");
+                                        beladungFertig();
+                                    }
+                                }
+                            }
+                        } catch (Exception e) {
+                            log.error("Fehler in ui.access: {}", e.getMessage(), e);
+                        }
+                    });
                 } catch (Exception e) {
-                    log.error("Fehler beim Poll: {}", e.getMessage());
+                    log.error("Fehler bei UI-Zugriff: {}", e.getMessage(), e);
                 }
             });
-        });
+        } catch (Exception e) {
+            // NIEMALS eine Exception aus dem Scheduler-Task werfen!
+            log.error("KRITISCH - Exception in pollBeladungStatus: {}", e.getMessage(), e);
+        }
     }
 
     private void pollBeladungOhneKran() {
@@ -874,7 +964,7 @@ public class BeladungView extends VerticalLayout {
                     if (geplanteBarren.isEmpty()) {
                         beladungFertig();
                     }
-                    ui.push();
+                    // ui.push() nicht nötig - PushMode.AUTOMATIC macht das automatisch
                 } catch (Exception e) {
                     log.error("Fehler: {}", e.getMessage());
                 }
@@ -882,9 +972,73 @@ public class BeladungView extends VerticalLayout {
         });
     }
 
+    /**
+     * Polling für UI-Updates - synchronisiert lokale UI mit dem StateService.
+     * Die eigentliche Beladungslogik läuft im BeladungProcessorService.
+     */
+    private void pollUIStatus() {
+        try {
+            getUI().ifPresent(ui -> {
+                if (!ui.isAttached()) return;
+
+                ui.access(() -> {
+                    try {
+                        // Status vom StateService holen
+                        boolean serverBeladungLaeuft = stateService.isBeladungLaeuft();
+                        int serverGeladen = stateService.getGeladeneCount();
+                        int localGeladen = geladeneBarren.size();
+
+                        // Prüfen ob sich etwas geändert hat
+                        if (serverGeladen != localGeladen) {
+                            log.info("UI-Update: Server hat {} geladen, lokal {}", serverGeladen, localGeladen);
+
+                            // Lokale Listen vom StateService synchronisieren
+                            geplanteBarren = new ArrayList<>(stateService.getGeplanteBarren());
+                            geladeneBarren = new ArrayList<>(stateService.getGeladeneBarren());
+                            kranKommandoGesendet = stateService.isKranKommandoGesendet();
+
+                            // UI aktualisieren
+                            updateLadeflaeche();
+                            updateAnzeigen();
+                            updateTransportGrid();
+                        }
+
+                        // Beladung beendet?
+                        // WICHTIG: Prüfe ob Server sagt "fertig" UND wir lokal noch "läuft" haben
+                        if (!serverBeladungLaeuft && beladungLaeuft) {
+                            log.info(">>> BELADUNG BEENDET ERKANNT! serverLaeuft={}, lokalLaeuft={}, geladen={}",
+                                serverBeladungLaeuft, beladungLaeuft, serverGeladen);
+
+                            // Synchronisiere Listen BEVOR beladungFertig() aufgerufen wird
+                            geplanteBarren = new ArrayList<>(stateService.getGeplanteBarren());
+                            geladeneBarren = new ArrayList<>(stateService.getGeladeneBarren());
+
+                            log.info(">>> Listen synchronisiert: geplant={}, geladen={}",
+                                geplanteBarren.size(), geladeneBarren.size());
+
+                            beladungLaeuft = false;
+                            beladungFertig();
+                        }
+
+                    } catch (Exception e) {
+                        log.error("Fehler in pollUIStatus: {}", e.getMessage(), e);
+                    }
+                });
+            });
+        } catch (Exception e) {
+            log.error("Kritischer Fehler in pollUIStatus: {}", e.getMessage(), e);
+        }
+    }
+
     private void sendeCranKommando(IngotDTO barren) {
         try {
             int[] pickupPos = getPickupPosition(barren);
+
+            log.info("=== BELADUNG KRAN-KOMMANDO ===");
+            log.info("  Barren: {} von Lagerplatz {} (ID={})",
+                barren.getIngotNo(), barren.getStockyardNo(), barren.getStockyardId());
+            log.info("  PICKUP:  X={}, Y={}, Z={}", pickupPos[0], pickupPos[1], pickupPos[2]);
+            log.info("  RELEASE: X={}, Y={}, Z={} (TRAILER)", TRAILER_X, TRAILER_Y, TRAILER_Z);
 
             PlcCommand cmd = PlcCommand.builder()
                 .pickupPosition(pickupPos[0], pickupPos[1], pickupPos[2])
@@ -900,9 +1054,9 @@ public class BeladungView extends VerticalLayout {
                 .build();
 
             plcService.sendCommand(cmd);
-            log.info("Kran-Kommando für {} gesendet", barren.getIngotNo());
+            log.info("  Kommando gesendet: {}", cmd);
         } catch (Exception e) {
-            log.error("Kran-Fehler: {}", e.getMessage());
+            log.error("Kran-Fehler: {}", e.getMessage(), e);
         }
     }
 
@@ -927,7 +1081,14 @@ public class BeladungView extends VerticalLayout {
 
     private void pauseBeladung() {
         if (beladungLaeuft) {
+            // Pausieren
             beladungLaeuft = false;
+            stateService.setBeladungLaeuft(false);
+
+            // Hintergrund-Processor stoppen
+            processorService.stop();
+
+            // Lokalen UI-Task stoppen
             if (beladungsTask != null) {
                 beladungsTask.cancel(false);
             }
@@ -937,9 +1098,15 @@ public class BeladungView extends VerticalLayout {
         } else {
             // Fortsetzen
             beladungLaeuft = true;
+            stateService.setBeladungLaeuft(true);
+            saveStateToService();
+
             boolean craneAvailable = plcService.isConnected() || plcService.isSimulatorMode();
             if (craneAvailable) {
-                beladungsTask = scheduler.scheduleAtFixedRate(this::pollBeladungStatus, 500, 500, TimeUnit.MILLISECONDS);
+                // Hintergrund-Processor starten
+                processorService.start();
+                // UI-Update Task starten
+                beladungsTask = scheduler.scheduleAtFixedRate(this::pollUIStatus, 500, 500, TimeUnit.MILLISECONDS);
             } else {
                 beladungsTask = scheduler.scheduleAtFixedRate(this::pollBeladungOhneKran, 500, 800, TimeUnit.MILLISECONDS);
             }
@@ -954,6 +1121,10 @@ public class BeladungView extends VerticalLayout {
         beladungAktiv = false;
         kranKommandoGesendet = false;
 
+        // Hintergrund-Processor stoppen
+        processorService.stop();
+
+        // Lokalen UI-Task stoppen
         if (beladungsTask != null) {
             beladungsTask.cancel(false);
             beladungsTask = null;
@@ -963,6 +1134,9 @@ public class BeladungView extends VerticalLayout {
         geladeneBarren.clear();
         selectedCalloff = null;
         beladungsNrField.clear();
+
+        // StateService zurücksetzen
+        stateService.reset();
 
         updateAnzeigen();
         updateLadeflaeche();
@@ -976,6 +1150,9 @@ public class BeladungView extends VerticalLayout {
     }
 
     private void beladungFertig() {
+        log.info("=== BELADUNG FERTIG (View-Local) ===");
+        log.info("  geladeneBarren={}, geplanteBarren={}", geladeneBarren.size(), geplanteBarren.size());
+
         beladungLaeuft = false;
         kranKommandoGesendet = false;
 
@@ -987,16 +1164,33 @@ public class BeladungView extends VerticalLayout {
         pauseBtn.setEnabled(false);
         broadcastStatus();
 
-        // Lieferschein erstellen
-        erstelleLieferschein();
-
+        // Notification anzeigen - Dialog wird über BELADUNG_ENDED Broadcast geöffnet
         Notification.show("Beladung fertig! " + geladeneBarren.size() + " Barren geladen.",
-            5000, Notification.Position.BOTTOM_CENTER)
+            3000, Notification.Position.BOTTOM_CENTER)
             .addThemeVariants(NotificationVariant.LUMO_SUCCESS);
+
+        // HINWEIS: Lieferschein wird jetzt vom BeladungProcessorService erstellt
+        // und über BELADUNG_ENDED Broadcast an alle Views verteilt
+        log.info("  Warte auf BELADUNG_ENDED Broadcast für Lieferschein-Dialog...");
     }
 
     private void erstelleLieferschein() {
-        if (geladeneBarren.isEmpty()) return;
+        log.info("erstelleLieferschein() aufgerufen, geladeneBarren={}", geladeneBarren.size());
+
+        // Hole geladene Barren vom StateService falls lokal leer
+        List<IngotDTO> barrenFuerLieferschein = geladeneBarren;
+        if (barrenFuerLieferschein.isEmpty()) {
+            barrenFuerLieferschein = new ArrayList<>(stateService.getGeladeneBarren());
+            log.info("  Lokale Liste leer, vom StateService geholt: {} Barren", barrenFuerLieferschein.size());
+        }
+
+        if (barrenFuerLieferschein.isEmpty()) {
+            log.warn("  Keine geladenen Barren fuer Lieferschein!");
+            Notification.show("Keine geladenen Barren fuer Lieferschein",
+                3000, Notification.Position.MIDDLE)
+                .addThemeVariants(NotificationVariant.LUMO_WARNING);
+            return;
+        }
 
         try {
             String orderNumber = selectedCalloff != null ? selectedCalloff.getOrderNumber() : null;
@@ -1004,13 +1198,18 @@ public class BeladungView extends VerticalLayout {
             String customerNumber = selectedCalloff != null ? selectedCalloff.getCustomerNumber() : null;
             String customerAddress = selectedCalloff != null ? selectedCalloff.getCustomerAddress() : null;
 
+            log.info("  Erstelle Shipment: orderNumber={}, destination={}, barren={}",
+                orderNumber, destination, barrenFuerLieferschein.size());
+
             Shipment shipment = shipmentService.createShipment(
                 orderNumber, destination, customerNumber, customerAddress,
-                new ArrayList<>(geladeneBarren)
+                new ArrayList<>(barrenFuerLieferschein)
             );
 
+            log.info("  Shipment erstellt: id={}, number={}", shipment.getId(), shipment.getShipmentNumber());
+
             if (selectedCalloff != null) {
-                calloffService.addDeliveredAmount(selectedCalloff.getId(), geladeneBarren.size());
+                calloffService.addDeliveredAmount(selectedCalloff.getId(), barrenFuerLieferschein.size());
             }
 
             DeliveryNoteDTO deliveryNote = new DeliveryNoteDTO();
@@ -1024,14 +1223,70 @@ public class BeladungView extends VerticalLayout {
                 deliveryNote.setCustomerAddress(selectedCalloff.getCustomerAddress());
                 deliveryNote.setDestination(selectedCalloff.getDestination());
             }
-            deliveryNote.setDeliveredIngots(new ArrayList<>(geladeneBarren));
+            deliveryNote.setDeliveredIngots(new ArrayList<>(barrenFuerLieferschein));
             deliveryNote.calculateTotals();
 
+            log.info("  Oeffne LieferungBestaetigenDialog...");
+            LieferungBestaetigenDialog dialog = new LieferungBestaetigenDialog(deliveryNote, pdfService, shipmentService);
+            dialog.open();
+            log.info("  Dialog geoeffnet!");
+
+        } catch (Exception e) {
+            log.error("Fehler beim Lieferschein: {}", e.getMessage(), e);
+            Notification.show("Fehler: " + e.getMessage(), 5000, Notification.Position.MIDDLE)
+                .addThemeVariants(NotificationVariant.LUMO_ERROR);
+        }
+    }
+
+    /**
+     * Öffnet den Lieferschein-Dialog für eine bestimmte Shipment-ID
+     * (wird vom BELADUNG_ENDED Broadcast aufgerufen)
+     */
+    private void openLieferscheinDialogById(Long shipmentId, String shipmentNumber) {
+        try {
+            log.info("openLieferscheinDialogById: id={}, nr={}", shipmentId, shipmentNumber);
+
+            Shipment shipment = shipmentService.findById(shipmentId).orElse(null);
+            if (shipment == null) {
+                log.error("Shipment nicht gefunden: {}", shipmentId);
+                Notification.show("Lieferschein nicht gefunden!", 3000, Notification.Position.MIDDLE)
+                    .addThemeVariants(NotificationVariant.LUMO_ERROR);
+                return;
+            }
+
+            // ShipmentLines laden und zu IngotDTOs konvertieren
+            var lines = shipmentService.findLinesByShipmentId(shipmentId);
+            List<IngotDTO> ingots = lines.stream()
+                .map(line -> {
+                    IngotDTO dto = new IngotDTO();
+                    dto.setIngotNo(line.getIngotNumber());
+                    dto.setProductNo(line.getProductNumber());
+                    dto.setWeight(line.getWeight());
+                    return dto;
+                })
+                .toList();
+
+            // DeliveryNoteDTO erstellen
+            DeliveryNoteDTO deliveryNote = new DeliveryNoteDTO();
+            deliveryNote.setId(shipment.getId());
+            deliveryNote.setDeliveryNoteNumber(shipment.getShipmentNumber());
+            deliveryNote.setCreatedAt(shipment.getDelivered());
+            deliveryNote.setOrderNumber(shipment.getOrderNumber());
+            deliveryNote.setCustomerNumber(shipment.getCustomerNumber());
+            deliveryNote.setCustomerAddress(shipment.getAddress());
+            deliveryNote.setDestination(shipment.getDestination());
+            if (selectedCalloff != null) {
+                deliveryNote.setCalloffNumber(selectedCalloff.getCalloffNumber());
+            }
+            deliveryNote.setDeliveredIngots(new ArrayList<>(ingots));
+            deliveryNote.calculateTotals();
+
+            log.info("Öffne LieferungBestaetigenDialog für Shipment {}", shipmentNumber);
             LieferungBestaetigenDialog dialog = new LieferungBestaetigenDialog(deliveryNote, pdfService, shipmentService);
             dialog.open();
 
         } catch (Exception e) {
-            log.error("Fehler beim Lieferschein: {}", e.getMessage());
+            log.error("Fehler beim Öffnen des Lieferschein-Dialogs: {}", e.getMessage(), e);
             Notification.show("Fehler: " + e.getMessage(), 5000, Notification.Position.MIDDLE)
                 .addThemeVariants(NotificationVariant.LUMO_ERROR);
         }
@@ -1211,6 +1466,11 @@ public class BeladungView extends VerticalLayout {
         geladeneBarren = new ArrayList<>(stateService.getGeladeneBarren());
         beladungsNummer = stateService.getBeladungsNummer();
 
+        log.info("=== BELADUNG STATE RESTORED ===");
+        log.info("  beladungAktiv={}, beladungLaeuft={}", beladungAktiv, beladungLaeuft);
+        log.info("  kranKommandoGesendet={}", kranKommandoGesendet);
+        log.info("  geplanteBarren={}, geladeneBarren={}", geplanteBarren.size(), geladeneBarren.size());
+
         if (beladungsNrField != null && !stateService.getBeladungsNr().isEmpty()) {
             beladungsNrField.setValue(stateService.getBeladungsNr());
         }
@@ -1221,11 +1481,24 @@ public class BeladungView extends VerticalLayout {
 
         if (beladungLaeuft && !geplanteBarren.isEmpty()) {
             boolean craneAvailable = plcService.isConnected() || plcService.isSimulatorMode();
+            log.info("  >>> BELADUNG LÄUFT, processor aktiv={}, craneAvailable={}",
+                processorService.isProcessing(), craneAvailable);
+
+            // Starte Hintergrund-Processor falls nicht bereits aktiv
+            if (craneAvailable && !processorService.isProcessing()) {
+                log.info("  >>> STARTE HINTERGRUND-PROCESSOR");
+                processorService.start();
+            }
+
+            // Starte UI-Update Scheduler (nur für lokale UI-Updates)
             if (craneAvailable) {
-                beladungsTask = scheduler.scheduleAtFixedRate(this::pollBeladungStatus, 500, 500, TimeUnit.MILLISECONDS);
+                beladungsTask = scheduler.scheduleAtFixedRate(this::pollUIStatus, 500, 500, TimeUnit.MILLISECONDS);
             } else {
                 beladungsTask = scheduler.scheduleAtFixedRate(this::pollBeladungOhneKran, 500, 800, TimeUnit.MILLISECONDS);
             }
+        } else {
+            log.info("  >>> KEIN SCHEDULER GESTARTET (beladungLaeuft={}, geplant={})",
+                beladungLaeuft, geplanteBarren.size());
         }
 
         startenBtn.setEnabled(beladungAktiv && !beladungLaeuft && !geplanteBarren.isEmpty());

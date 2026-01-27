@@ -22,8 +22,12 @@ import com.hydro.plsbl.ui.MainLayout;
 import com.hydro.plsbl.ui.component.LagerGrid;
 import com.hydro.plsbl.ui.dialog.IngotEditDialog;
 import com.hydro.plsbl.ui.dialog.StockyardEditDialog;
+import com.hydro.plsbl.ui.dialog.LieferungBestaetigenDialog;
 import com.hydro.plsbl.ui.dialog.StockyardInfoDialog;
 import com.hydro.plsbl.ui.dialog.StockyardMergeDialog;
+import com.hydro.plsbl.dto.DeliveryNoteDTO;
+import com.hydro.plsbl.entity.transdata.Shipment;
+import com.hydro.plsbl.entity.transdata.ShipmentLine;
 import com.vaadin.flow.component.AttachEvent;
 import com.vaadin.flow.component.DetachEvent;
 import com.vaadin.flow.component.UI;
@@ -33,6 +37,8 @@ import com.vaadin.flow.component.html.Div;
 import com.vaadin.flow.component.html.H3;
 import com.vaadin.flow.component.html.Span;
 import com.vaadin.flow.component.icon.VaadinIcon;
+import com.vaadin.flow.component.notification.Notification;
+import com.vaadin.flow.component.notification.NotificationVariant;
 import com.vaadin.flow.component.orderedlayout.HorizontalLayout;
 import com.vaadin.flow.component.orderedlayout.VerticalLayout;
 import com.vaadin.flow.component.textfield.TextField;
@@ -108,6 +114,10 @@ public class LagerView extends VerticalLayout {
     private Div beladungProgressBar;
     private Div beladungProgressFill;
 
+    // DEBUG: Heartbeat Indikator für UI-Update-Diagnose
+    private Span heartbeatIndicator;
+    private int heartbeatCount = 0;
+
     // Ziel-Lagerplatz Tracking für Einlagerung von der Säge
     private int previousSawIngotCount = 0;
 
@@ -147,6 +157,13 @@ public class LagerView extends VerticalLayout {
         super.onAttach(attachEvent);
         UI ui = attachEvent.getUI();
 
+        log.info("=== LAGERVIEW ATTACH === UI={}, UI.isAttached={}",
+            ui != null ? ui.hashCode() : "null",
+            ui != null ? ui.isAttached() : "N/A");
+
+        // Heartbeat zurücksetzen bei erneutem Attach
+        heartbeatCount = 0;
+
         // Kran-Updates starten
         startCraneUpdates(ui);
 
@@ -157,6 +174,12 @@ public class LagerView extends VerticalLayout {
                     event.getType(), event.getGeladeneCount(), event.getTotalCount());
                 lagerGrid.updateTrailerLoad(event.getGeladeneCount(), event.getTotalCount(), event.isLoading());
                 updateBeladungStatusDisplay(event.getGeladeneCount(), event.getTotalCount(), event.isLoading());
+
+                // Beladung beendet? Lieferschein anzeigen!
+                if (event.getType() == BeladungBroadcaster.BeladungEventType.BELADUNG_ENDED && event.hasShipment()) {
+                    log.info(">>> BELADUNG BEENDET - Zeige Lieferschein-Notification: {}", event.getShipmentNumber());
+                    showLieferscheinNotification(event.getShipmentId(), event.getShipmentNumber(), event.getGeladeneCount());
+                }
             });
         });
 
@@ -177,6 +200,8 @@ public class LagerView extends VerticalLayout {
 
     @Override
     protected void onDetach(DetachEvent detachEvent) {
+        log.info("=== LAGERVIEW DETACH === heartbeatCount={}", heartbeatCount);
+
         // Broadcaster-Registrierungen aufheben
         if (broadcasterRegistration != null) {
             broadcasterRegistration.remove();
@@ -234,7 +259,19 @@ public class LagerView extends VerticalLayout {
         boolean craneAvailable = plcService.isConnected() || plcService.isSimulatorMode();
         relocateButton.setEnabled(craneAvailable);
 
-        HorizontalLayout header = new HorizontalLayout(title, info, beladungStatusPanel, spacer, searchField, refreshButton, relocateButton, newButton);
+        // DEBUG: Heartbeat Indikator - zeigt an ob UI-Updates funktionieren
+        heartbeatIndicator = new Span("⚡ 0");
+        heartbeatIndicator.getStyle()
+            .set("color", "#4CAF50")
+            .set("font-weight", "bold")
+            .set("font-size", "11px")
+            .set("background-color", "#E8F5E9")
+            .set("padding", "2px 8px")
+            .set("border-radius", "10px")
+            .set("margin-left", "10px");
+        heartbeatIndicator.setTitle("UI-Update Zähler (sollte kontinuierlich steigen)");
+
+        HorizontalLayout header = new HorizontalLayout(title, info, beladungStatusPanel, heartbeatIndicator, spacer, searchField, refreshButton, relocateButton, newButton);
         header.setAlignItems(Alignment.CENTER);
         header.setWidthFull();
 
@@ -967,22 +1004,81 @@ public class LagerView extends VerticalLayout {
             return;  // Bereits gestartet
         }
 
-        craneUpdateExecutor = Executors.newSingleThreadScheduledExecutor();
-        craneUpdateFuture = craneUpdateExecutor.scheduleAtFixedRate(() -> {
-            try {
-                ui.access(() -> {
-                    // Kran-Status immer aktualisieren
-                    loadCraneStatus();
+        craneUpdateExecutor = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "LagerView-CraneUpdate");
+            t.setDaemon(true);
+            return t;
+        });
 
-                    // Stockyard-Daten periodisch aktualisieren
-                    dataRefreshCounter++;
-                    if (dataRefreshCounter >= DATA_REFRESH_MULTIPLIER) {
-                        dataRefreshCounter = 0;
-                        refreshStockyardData();
+        // Zähler für Scheduler-Ticks
+        final int[] tickCounter = {0};
+
+        craneUpdateFuture = craneUpdateExecutor.scheduleAtFixedRate(() -> {
+            tickCounter[0]++;
+
+            // WICHTIG: Gesamter Code in try-catch um Scheduler-Stopp zu verhindern!
+            try {
+                // Alle 5 Sekunden Status loggen
+                if (tickCounter[0] % 25 == 0) {
+                    log.info(">>> LagerView Scheduler TICK #{} - UI attached: {}",
+                        tickCounter[0], ui != null && ui.isAttached());
+                }
+
+                // Prüfen ob UI noch attached ist BEVOR ui.access() aufgerufen wird
+                if (ui == null) {
+                    log.warn("LagerView Scheduler: UI ist null!");
+                    return;
+                }
+
+                boolean attached = false;
+                try {
+                    attached = ui.isAttached();
+                } catch (Exception e) {
+                    log.warn("LagerView Scheduler: UI.isAttached() warf Exception: {}", e.getMessage());
+                    return;
+                }
+
+                if (!attached) {
+                    log.debug("LagerView Scheduler: UI nicht attached");
+                    return;
+                }
+
+                // ui.access() - Vaadin sorgt für Thread-Sicherheit
+                ui.access(() -> {
+                    try {
+                        // DEBUG: Heartbeat Indikator aktualisieren
+                        heartbeatCount++;
+                        if (heartbeatIndicator != null) {
+                            heartbeatIndicator.setText("⚡ " + heartbeatCount);
+                            // Farbe wechseln für visuelles Feedback
+                            if (heartbeatCount % 2 == 0) {
+                                heartbeatIndicator.getStyle().set("background-color", "#E8F5E9");
+                            } else {
+                                heartbeatIndicator.getStyle().set("background-color", "#C8E6C9");
+                            }
+                        }
+
+                        // Logge alle 25 Ticks (5 Sekunden) dass ui.access() erfolgreich ausgeführt wird
+                        if (heartbeatCount % 25 == 0) {
+                            log.info(">>> UI.ACCESS TICK #{} - Updates funktionieren", heartbeatCount);
+                        }
+
+                        // Kran-Status immer aktualisieren
+                        loadCraneStatus();
+
+                        // Stockyard-Daten periodisch aktualisieren
+                        dataRefreshCounter++;
+                        if (dataRefreshCounter >= DATA_REFRESH_MULTIPLIER) {
+                            dataRefreshCounter = 0;
+                            refreshStockyardData();
+                        }
+                    } catch (Exception e) {
+                        log.error("Error in ui.access lambda: {}", e.getMessage(), e);
                     }
                 });
             } catch (Exception e) {
-                log.debug("Update skipped: {}", e.getMessage());
+                // NIEMALS Exception aus Scheduler werfen - sonst stoppt er!
+                log.error("KRITISCH - LagerView Scheduler Exception: {}", e.getMessage(), e);
             }
         }, CRANE_UPDATE_INTERVAL_MS, CRANE_UPDATE_INTERVAL_MS, TimeUnit.MILLISECONDS);
 
@@ -1108,6 +1204,13 @@ public class LagerView extends VerticalLayout {
     private void updateCraneFromSimulator() {
         CraneSimulatorService.SimulatorStatus simStatus = simulatorService.getSimulatorStatus();
 
+        // Debug: Zeige Position alle 2 Sekunden
+        if (System.currentTimeMillis() % 2000 < 200) {
+            log.info("LagerView Kran-Update: pos=({},{},{}), phase={}, job={}",
+                simStatus.xPosition(), simStatus.yPosition(), simStatus.zPosition(),
+                simStatus.workPhase(), simStatus.jobState());
+        }
+
         if (lagerGrid == null) return;
 
         int xMm = simStatus.xPosition();
@@ -1226,5 +1329,84 @@ public class LagerView extends VerticalLayout {
      */
     private int gridToMmY(int gridY) {
         return settingsService.gridToMmY(gridY);
+    }
+
+    /**
+     * Zeigt eine Notification mit Lieferschein-Info und Button zum Öffnen des Dialogs
+     */
+    private void showLieferscheinNotification(Long shipmentId, String shipmentNumber, int geladeneCount) {
+        // Notification mit Button erstellen
+        Notification notification = new Notification();
+        notification.setDuration(0); // Bleibt offen bis manuell geschlossen
+        notification.setPosition(Notification.Position.MIDDLE);
+        notification.addThemeVariants(NotificationVariant.LUMO_SUCCESS);
+
+        HorizontalLayout content = new HorizontalLayout();
+        content.setAlignItems(Alignment.CENTER);
+        content.setSpacing(true);
+
+        Span text = new Span("Beladung abgeschlossen! " + geladeneCount + " Barren geladen. Lieferschein: " + shipmentNumber);
+
+        Button showButton = new Button("Lieferschein anzeigen", VaadinIcon.FILE_TEXT.create());
+        showButton.addThemeVariants(ButtonVariant.LUMO_PRIMARY, ButtonVariant.LUMO_SMALL);
+        showButton.addClickListener(e -> {
+            notification.close();
+            openLieferscheinDialog(shipmentId);
+        });
+
+        Button closeButton = new Button(VaadinIcon.CLOSE.create());
+        closeButton.addThemeVariants(ButtonVariant.LUMO_TERTIARY, ButtonVariant.LUMO_SMALL);
+        closeButton.addClickListener(e -> notification.close());
+
+        content.add(text, showButton, closeButton);
+        notification.add(content);
+        notification.open();
+    }
+
+    /**
+     * Öffnet den Lieferschein-Dialog für eine bestimmte Shipment-ID
+     */
+    private void openLieferscheinDialog(Long shipmentId) {
+        try {
+            Shipment shipment = shipmentService.findById(shipmentId).orElse(null);
+            if (shipment == null) {
+                Notification.show("Lieferschein nicht gefunden!", 3000, Notification.Position.MIDDLE)
+                    .addThemeVariants(NotificationVariant.LUMO_ERROR);
+                return;
+            }
+
+            // ShipmentLines laden und zu IngotDTOs konvertieren
+            List<ShipmentLine> lines = shipmentService.findLinesByShipmentId(shipmentId);
+            List<IngotDTO> ingots = lines.stream()
+                .map(line -> {
+                    IngotDTO dto = new IngotDTO();
+                    dto.setIngotNo(line.getIngotNumber());
+                    dto.setProductNo(line.getProductNumber());
+                    dto.setWeight(line.getWeight());
+                    return dto;
+                })
+                .toList();
+
+            // DeliveryNoteDTO erstellen
+            DeliveryNoteDTO deliveryNote = new DeliveryNoteDTO();
+            deliveryNote.setId(shipment.getId());
+            deliveryNote.setDeliveryNoteNumber(shipment.getShipmentNumber());
+            deliveryNote.setCreatedAt(shipment.getDelivered());
+            deliveryNote.setOrderNumber(shipment.getOrderNumber());
+            deliveryNote.setCustomerNumber(shipment.getCustomerNumber());
+            deliveryNote.setCustomerAddress(shipment.getAddress());
+            deliveryNote.setDestination(shipment.getDestination());
+            deliveryNote.setDeliveredIngots(new java.util.ArrayList<>(ingots));
+            deliveryNote.calculateTotals();
+
+            // Dialog öffnen
+            LieferungBestaetigenDialog dialog = new LieferungBestaetigenDialog(deliveryNote, pdfService, shipmentService);
+            dialog.open();
+
+        } catch (Exception e) {
+            log.error("Fehler beim Öffnen des Lieferschein-Dialogs: {}", e.getMessage(), e);
+            Notification.show("Fehler: " + e.getMessage(), 5000, Notification.Position.MIDDLE)
+                .addThemeVariants(NotificationVariant.LUMO_ERROR);
+        }
     }
 }
