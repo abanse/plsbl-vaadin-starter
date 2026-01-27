@@ -1,9 +1,103 @@
 =============================================================================
 ENTWICKLUNGSSTAND - PLSBL Vaadin Starter
-Stand: 26.01.2026
+Stand: 27.01.2026 (Abend)
 =============================================================================
 
-AKTUELLES THEMA: Barrentypen-Berechtigungen implementieren
+AKTUELLES THEMA: Sicherheits-Alarmsystem mit Kran-Stopp
+-----------------------------------------------------------------------------
+
+ZULETZT IMPLEMENTIERT (27.01.2026 Abend):
+-----------------------------------------------------------------------------
+
+1. Einheitlicher MessageService für Alarme und Meldungen
+
+   AlarmService wurde in MessageService integriert. Der MessageService
+   übernimmt jetzt:
+   - Alarm-/Warnungs-/Info-Meldungen mit Historie
+   - Tür-/Tor-Überwachung (checkStatus())
+   - Kran-Sicherheitsstopp bei offenen Türen
+   - Quittierung einzeln oder alle
+
+   Datei: src/main/java/com/hydro/plsbl/service/MessageService.java
+
+2. MeldungenView - System-Meldungen Tab
+
+   Neuer Tab "Meldungen" in der Navigation zeigt alle System-Meldungen:
+   - Grid mit allen Meldungen (Typ, Kategorie, Code, Text, Status, Zeit)
+   - Filter nach Typ (Alle/Alarm/Warnung/Info)
+   - Filter nach Status (Alle/Aktiv/Quittiert/Behoben)
+   - "Alle quittieren" Button
+   - Einzelne Quittieren-Buttons pro Zeile
+   - Test-Button für Demo-Meldungen
+
+   Datei: src/main/java/com/hydro/plsbl/ui/view/MeldungenView.java
+
+3. Kran-Sicherheitsstopp bei Tür-Alarmen
+
+   SICHERHEITSFUNKTION: Wenn ein Tor/Tür geöffnet wird:
+   1. Alarm wird sofort erzeugt
+   2. Kran STOPPT SOFORT (pausiert mitten in der Bewegung)
+   3. AlarmBar zeigt rot blinkend "⏸ KRAN GESTOPPT"
+
+   Kran fährt erst weiter wenn BEIDE Bedingungen erfüllt:
+   - Tor ist wieder geschlossen (Bedingung behoben)
+   - Alarm wurde quittiert
+
+   Implementierung:
+   a) CraneSimulatorService erweitert:
+      - paused Flag
+      - pause() / resume() / isPaused() Methoden
+      - nextState() überspringt Bewegungen wenn pausiert
+      Datei: src/main/java/com/hydro/plsbl/simulator/CraneSimulatorService.java
+
+   b) MessageService erweitert:
+      - pauseCrane() - stoppt Kran bei Tür-Alarm
+      - checkAndResumeCrane() - prüft ob Kran fortgesetzt werden kann
+      - acknowledge() ruft checkAndResumeCrane() nach Quittierung
+      Datei: src/main/java/com/hydro/plsbl/service/MessageService.java
+
+   c) AlarmBar erweitert:
+      - Zeigt "⏸ KRAN GESTOPPT" Label wenn pausiert
+      - Rot blinkend bei unquittierten Alarmen
+      - Orange wenn quittiert aber Bedingung noch aktiv
+      Datei: src/main/java/com/hydro/plsbl/ui/component/AlarmBar.java
+
+4. Integration in Prozessoren
+
+   TransportOrderProcessor und BeladungProcessorService verwenden jetzt
+   MessageService statt AlarmService:
+   - messageService.checkStatus() prüft Tür-Status
+   - messageService.isCraneOperationAllowed() für Kran-Freigabe
+
+   Dateien:
+   - src/main/java/com/hydro/plsbl/service/TransportOrderProcessor.java
+   - src/main/java/com/hydro/plsbl/service/BeladungProcessorService.java
+
+5. Klickbare Tore im LagerGrid (Simulator-Test)
+
+   Im Simulator-Modus können Tore im LagerGrid angeklickt werden:
+   - Klick togglet Tor-Status (offen/geschlossen)
+   - Grün = geschlossen, Rot = offen
+   - Löst Alarm aus und stoppt Kran bei Öffnung
+
+   Datei: src/main/java/com/hydro/plsbl/ui/component/LagerGrid.java
+
+TESTEN DER SICHERHEITSFUNKTION:
+-----------------------------------------------------------------------------
+
+1. Anwendung starten (Simulator-Modus)
+2. Beladung starten oder Transport-Auftrag erstellen
+3. Während Kran fährt: Auf ein Tor im LagerGrid klicken (z.B. T1)
+4. Beobachten:
+   - Rote AlarmBar erscheint mit "⏸ KRAN GESTOPPT"
+   - Kran stoppt sofort
+5. Tor wieder schließen (erneut klicken)
+6. Alarm in AlarmBar oder MeldungenView quittieren
+7. Kran fährt automatisch weiter
+
+=============================================================================
+
+VORHERIGES THEMA: Auto-Auslagerung für MITTEL-Barren
 -----------------------------------------------------------------------------
 
 ZIEL:
@@ -14,6 +108,65 @@ ZIEL:
 
 ABGESCHLOSSENE ARBEITEN:
 -----------------------------------------------------------------------------
+
+0. [NEU 27.01.2026] Auto-Auslagerung für MITTEL-Barren implementiert
+
+   MITTEL-Barren (autoRetrieval=true) werden automatisch vom externen Lager
+   zum Belade-Bereich angefordert, wenn ein Abruf genehmigt wird.
+
+   a) AutoRetrievalService (NEU)
+      - processCalloffApproval() - Wird bei Abruf-Genehmigung aufgerufen
+      - Prüft ob Barrentyp autoRetrieval=true hat
+      - Sucht passende Barren auf externen Plätzen (YARD_TYPE='E')
+      - Erstellt Transport-Aufträge (Typ: Stapler) zum SWAPIN/Belade-Bereich
+      - Generiert Stapler-Anforderungen für Benachrichtigung
+      Datei: src/main/java/com/hydro/plsbl/service/AutoRetrievalService.java
+
+   b) StaplerAnforderungBroadcaster (NEU)
+      - Broadcaster für Stapler-Anforderungen
+      - Registrierung via register() mit Consumer<List<StaplerAnforderung>>
+      - Verwaltet offene Anforderungen
+      - markCompleted() zum Markieren erledigter Anforderungen
+      Datei: src/main/java/com/hydro/plsbl/service/StaplerAnforderungBroadcaster.java
+
+   c) CalloffService.approve() erweitert
+      - Nach Genehmigung: AutoRetrievalService.processCalloffApproval()
+      - Lazy-Injection via ObjectProvider (zirkuläre Abhängigkeit vermeiden)
+      - Log-Ausgabe bei erstellten Anforderungen
+      Datei: src/main/java/com/hydro/plsbl/service/CalloffService.java
+
+   d) MainLayout - Stapler-Notifications (NEU)
+      - Registriert sich bei StaplerAnforderungBroadcaster
+      - Zeigt Notification bei Stapler-Anforderungen (oben rechts)
+      - Orange Truck-Icon, Abruf-Nummer, max. 3 Anforderungen angezeigt
+      Datei: src/main/java/com/hydro/plsbl/ui/MainLayout.java
+
+   e) Testdaten erweitert
+      - 10 MITTEL-Barren (5000-6100mm) auf externen Plätzen 16/10, 17/10, 16/09, 17/09
+      - StockyardStatus für externe Plätze aktualisiert
+      Datei: src/main/resources/data-h2.sql
+
+   Workflow Auto-Auslagerung:
+   1. Abruf wird genehmigt (AbrufView)
+   2. CalloffService.approve() ruft AutoRetrievalService auf
+   3. AutoRetrievalService prüft:
+      - Sind MITTEL-Barren auf externen Plätzen?
+      - Haben diese Barren autoRetrieval=true?
+   4. Falls ja: Transport-Aufträge für Stapler erstellen
+   5. StaplerAnforderungBroadcaster sendet Notification an UI
+   6. Stapler-Fahrer sieht Anforderung und holt Barren
+
+   StaplerAnforderung Datenstruktur:
+   | Feld            | Beschreibung                           |
+   |-----------------|----------------------------------------|
+   | transportNo     | Transportnummer (ST26-0001)            |
+   | barrenNo        | Barren-Nummer                          |
+   | vonPlatz        | Quell-Lagerplatz (extern)              |
+   | nachPlatz       | Ziel-Lagerplatz (SWAPIN/Belade-Bereich)|
+   | calloffNo       | Abruf-Nummer                           |
+   | auftragNo       | Auftragsnummer                         |
+   | gewicht         | Barren-Gewicht                         |
+   | laenge          | Barren-Länge                           |
 
 1. [NEU 26.01.2026] MITTEL-Barren → SWAPOUT für Stapler-Transport
 
@@ -262,14 +415,53 @@ ZUGRIFF auf neue Funktionen:
 1. Einstellungen → Tab "Stammdaten" → "Barrentypen verwalten"
 2. Einstellungen → Tab "Stammdaten" → "Artikel verwalten"
 
+BUGFIXES 27.01.2026:
+-----------------------------------------------------------------------------
+
+1. [BEHOBEN] Kran legt Barren bei Beladung an falscher Position ab
+
+   Problem: Kran legte Barren bei Position 07/02 ab statt auf dem Trailer
+
+   Ursache: Die TRAILER-Koordinaten (45000, 9000mm) lagen im normalen
+   Grid-Bereich und wurden zur visuellen Position 07/02 gemappt.
+
+   Lösung:
+   a) BeladungView.java: TRAILER-Koordinaten angepasst
+      - TRAILER_X: 45000 → 40000 (Mitte Beladungsfläche)
+      - TRAILER_Y: 9000 → 2000 (UNTER dem Grid, Y=1 ist bei 6270mm)
+      Datei: src/main/java/com/hydro/plsbl/ui/view/BeladungView.java
+
+   b) LagerGrid.java: Spezialfall für TRAILER-Bereich hinzugefügt
+      - updateCranePixelPosition() erkennt jetzt TRAILER-Position
+      - Wenn Y < 6000mm und X zwischen 30000-50000mm → TRAILER
+      - PIXEL_TRAILER_X = 1150, PIXEL_TRAILER_Y = 590 (empirisch kalibriert)
+      Datei: src/main/java/com/hydro/plsbl/ui/component/LagerGrid.java
+
+2. [BEHOBEN] UI friert ein bei LagerView während Beladung
+
+   Problem: UI friert ein wenn man zur LagerView wechselt während Beladung läuft
+
+   Ursache: BeladungView hatte explizite ui.push() Aufrufe, die mit
+   @Push(PushMode.AUTOMATIC) kollidieren können.
+
+   Lösung: Entfernte redundante ui.push() Aufrufe in BeladungView
+   - pollBeladungStatus(): ui.push() entfernt
+   - pollBeladungOhneKran(): ui.push() entfernt
+   PushMode.AUTOMATIC macht das automatisch nach ui.access()
+   Datei: src/main/java/com/hydro/plsbl/ui/view/BeladungView.java
+
 NÄCHSTE SCHRITTE:
 -----------------------------------------------------------------------------
 
 1. Oracle-Migration für MD_INGOTTYPE ausführen (inkl. SAW_TO_SWAPOUT Feld)
 2. [ERLEDIGT] MITTEL-Barren: SWAPOUT-Logik implementiert (Stapler-Transport)
-3. Externe Plätze verwalten (Buchung ohne Kran, manuelle Umbuchung)
-4. Auto-Auslagerung für MITTEL-Barren implementieren (autoRetrieval=true)
-5. Regex-Matching für Produktnummern testen
-6. MITTEL-Barren-Einlagerung testen (manuell über SawView)
+3. [ERLEDIGT] Auto-Auslagerung für MITTEL-Barren implementiert (autoRetrieval=true)
+4. [ERLEDIGT] StaplerView erstellt (Übersicht offener Stapler-Anforderungen)
+5. [ERLEDIGT] SWAPIN-Plätze definiert (YARD_TYPE='N')
+6. [ERLEDIGT] MessageService + MeldungenView (Alarme quittieren)
+7. [ERLEDIGT] Kran-Sicherheitsstopp bei offenen Türen
+8. Regex-Matching für Produktnummern testen
+9. MITTEL-Barren-Workflow testen (Einlagerung → SWAPOUT → extern → Auto-Auslagerung)
+10. Echte PLC-Anbindung für Tür-/Tor-Status testen
 
 =============================================================================
