@@ -1,6 +1,8 @@
 package com.hydro.plsbl.service;
 
 import com.vaadin.flow.shared.Registration;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.util.LinkedList;
@@ -14,6 +16,8 @@ import java.util.function.Consumer;
  */
 @Service
 public class BeladungBroadcaster {
+
+    private static final Logger log = LoggerFactory.getLogger(BeladungBroadcaster.class);
 
     private final Executor executor = Executors.newSingleThreadExecutor();
     private final LinkedList<Consumer<BeladungEvent>> listeners = new LinkedList<>();
@@ -34,8 +38,23 @@ public class BeladungBroadcaster {
      * Sendet ein Event an alle registrierten Listener
      */
     public synchronized void broadcast(BeladungEvent event) {
+        log.info(">>> BROADCAST: type={}, listeners={}, hasShipment={}",
+            event.getType(), listeners.size(), event.hasShipment());
+        if (event.hasShipment()) {
+            log.info(">>>   shipmentId={}, shipmentNumber={}", event.getShipmentId(), event.getShipmentNumber());
+        }
+        int listenerIndex = 0;
         for (Consumer<BeladungEvent> listener : listeners) {
-            executor.execute(() -> listener.accept(event));
+            final int idx = listenerIndex++;
+            executor.execute(() -> {
+                try {
+                    log.info(">>> Listener {} empfängt Event...", idx);
+                    listener.accept(event);
+                    log.info(">>> Listener {} hat Event verarbeitet", idx);
+                } catch (Exception e) {
+                    log.error(">>> FEHLER in Listener {}: {}", idx, e.getMessage(), e);
+                }
+            });
         }
     }
 
@@ -64,10 +83,14 @@ public class BeladungBroadcaster {
      * Convenience-Methode: Broadcast dass Beladung beendet wurde MIT Lieferschein
      */
     public void broadcastBeladungEndedWithShipment(int geladeneCount, Long shipmentId, String shipmentNumber) {
+        log.info(">>> broadcastBeladungEndedWithShipment: count={}, shipmentId={}, shipmentNumber={}",
+            geladeneCount, shipmentId, shipmentNumber);
         BeladungEvent event = new BeladungEvent(BeladungEventType.BELADUNG_ENDED, geladeneCount, geladeneCount, false);
         event.setShipmentId(shipmentId);
         event.setShipmentNumber(shipmentNumber);
+        log.info(">>> Event erstellt, rufe broadcast() auf...");
         broadcast(event);
+        log.info(">>> broadcast() aufgerufen!");
     }
 
     /**

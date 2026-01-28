@@ -806,10 +806,22 @@ public class BeladungView extends VerticalLayout {
         }
 
         // Barren laden - immer alle verfügbaren laden, unabhängig von PRODUCT_ID
+        log.info("=== ERMITTLE BARREN START ===");
         List<IngotDTO> verfuegbareBarren = ingotService.findAllInStock();
         log.info("Verfügbare Barren im Lager: {}", verfuegbareBarren.size());
 
+        // Debug: Erste 5 Barren mit Details anzeigen
+        if (!verfuegbareBarren.isEmpty()) {
+            log.info("Erste Barren (max 5):");
+            for (int i = 0; i < Math.min(5, verfuegbareBarren.size()); i++) {
+                IngotDTO b = verfuegbareBarren.get(i);
+                log.info("  [{}] {} - Gewicht={} kg, Länge={} mm, Platz={}",
+                    i, b.getIngotNo(), b.getWeight(), b.getLength(), b.getStockyardNo());
+            }
+        }
+
         if (verfuegbareBarren.isEmpty()) {
+            log.warn("!!! KEINE BARREN GEFUNDEN - findAllInStock() liefert leere Liste !!!");
             Notification.show("Keine Barren im Lager gefunden!",
                 3000, Notification.Position.MIDDLE)
                 .addThemeVariants(NotificationVariant.LUMO_WARNING);
@@ -824,20 +836,41 @@ public class BeladungView extends VerticalLayout {
         int anzahl = remaining > 0 ? Math.min(maxAnzahl, remaining) : maxAnzahl;
         anzahl = Math.min(anzahl, verfuegbareBarren.size());
 
-        log.info("Ermittle {} Barren (max={}, remaining={}, verfügbar={})",
-            anzahl, maxAnzahl, remaining, verfuegbareBarren.size());
+        log.info("Parameter: maxAnzahl={}, maxGewicht={} kg, remaining={}, verfuegbar={}, anzahl={}",
+            maxAnzahl, maxGewicht, remaining, verfuegbareBarren.size(), anzahl);
+
+        // Sicherstellen dass geplanteBarren leer ist
+        int vorherGeplant = geplanteBarren.size();
+        if (vorherGeplant > 0) {
+            log.warn("geplanteBarren war nicht leer! Hatte {} Einträge. Leere jetzt.", vorherGeplant);
+            geplanteBarren.clear();
+        }
 
         int aktuellesGewicht = 0;
+        int abgelehntWegenGewicht = 0;
         for (int i = 0; i < verfuegbareBarren.size() && geplanteBarren.size() < anzahl; i++) {
             IngotDTO barren = verfuegbareBarren.get(i);
-            int barrenGewicht = barren.getWeight() != null ? barren.getWeight() : 0;
+            // WICHTIG: Oracle speichert Gewicht in GRAMM, UI erwartet KG -> /1000
+            int barrenGewichtGramm = barren.getWeight() != null ? barren.getWeight() : 0;
+            int barrenGewichtKg = barrenGewichtGramm / 1000;
 
-            if (aktuellesGewicht + barrenGewicht <= maxGewicht) {
+            if (aktuellesGewicht + barrenGewichtKg <= maxGewicht) {
                 geplanteBarren.add(barren);
-                aktuellesGewicht += barrenGewicht;
-                log.debug("Barren hinzugefügt: {} ({} kg)", barren.getIngotNo(), barrenGewicht);
+                aktuellesGewicht += barrenGewichtKg;
+                log.info("Barren hinzugefügt: {} ({} g = {} kg) -> Summe: {} kg",
+                    barren.getIngotNo(), barrenGewichtGramm, barrenGewichtKg, aktuellesGewicht);
+            } else {
+                abgelehntWegenGewicht++;
+                if (abgelehntWegenGewicht <= 3) {
+                    log.info("Barren abgelehnt (Gewicht): {} ({} g = {} kg) würde {} kg ergeben > {} kg",
+                        barren.getIngotNo(), barrenGewichtGramm, barrenGewichtKg,
+                        aktuellesGewicht + barrenGewichtKg, maxGewicht);
+                }
             }
         }
+
+        log.info("Schleife beendet: {} Barren geplant, {} wegen Gewicht abgelehnt, Gesamtgewicht={} kg",
+            geplanteBarren.size(), abgelehntWegenGewicht, aktuellesGewicht);
 
         if (!geplanteBarren.isEmpty()) {
             Integer ersteLaenge = geplanteBarren.get(0).getLength();
@@ -847,12 +880,17 @@ public class BeladungView extends VerticalLayout {
                 3000, Notification.Position.BOTTOM_CENTER)
                 .addThemeVariants(NotificationVariant.LUMO_SUCCESS);
         } else {
+            log.error("!!! KEINE BARREN GEPLANT trotz {} verfügbarer Barren !!!", verfuegbareBarren.size());
+            log.error("    anzahl={}, maxGewicht={}, erster Barren Gewicht={}",
+                anzahl, maxGewicht,
+                verfuegbareBarren.isEmpty() ? "N/A" : verfuegbareBarren.get(0).getWeight());
             Notification.show("Keine passenden Barren gefunden (Gewichtslimit: " + maxGewicht + " kg)",
                 3000, Notification.Position.MIDDLE)
                 .addThemeVariants(NotificationVariant.LUMO_WARNING);
         }
 
-        log.info("{} Barren ermittelt für Abruf {}", geplanteBarren.size(), selectedCalloff.getCalloffNumber());
+        log.info("=== ERMITTLE BARREN ENDE: {} Barren für Abruf {} ===",
+            geplanteBarren.size(), selectedCalloff.getCalloffNumber());
     }
 
     private void starteBeladung() {

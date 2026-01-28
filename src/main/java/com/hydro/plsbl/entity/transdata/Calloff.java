@@ -28,22 +28,24 @@ public class Calloff implements Persistable<Long> {
     @Column("SERIAL")
     private Long serial;
 
-    @Column("TABLESERIAL")
+    // TABLESERIAL nicht in Oracle-Schema vorhanden
+    @Transient
     private Long tableSerial;
 
-    @Column("CALLOFF_NUMBER")
+    @Column("CALLOFF_NO")
     private String calloffNumber;
 
-    @Column("ORDER_NUMBER")
+    @Column("ORDER_NO")
     private String orderNumber;
 
-    @Column("ORDER_POSITION")
+    @Column("ORDER_POS")
     private String orderPosition;
 
-    @Column("CUSTOMER_NUMBER")
+    @Column("CUSTOMER_NO")
     private String customerNumber;
 
-    @Column("CUSTOMER_NAME")
+    // CUSTOMER_NAME nicht in Oracle-Schema vorhanden
+    @Transient
     private String customerName;
 
     @Column("CUSTOMER_ADDRESS")
@@ -52,7 +54,7 @@ public class Calloff implements Persistable<Long> {
     @Column("DESTINATION")
     private String destination;
 
-    @Column("SAP_PRODUCT_NUMBER")
+    @Column("SAP_PRODUCT_NO")
     private String sapProductNumber;
 
     @Column("PRODUCT_ID")
@@ -64,7 +66,7 @@ public class Calloff implements Persistable<Long> {
     @Column("AMOUNT_DELIVERED")
     private Integer amountDelivered;
 
-    @Column("DELIVERY_DATE")
+    @Column("DELIVERY")
     private LocalDate deliveryDate;
 
     @Column("APPROVED")
@@ -76,7 +78,7 @@ public class Calloff implements Persistable<Long> {
     @Column("RECEIVED")
     private LocalDateTime received;
 
-    @Column("NOTES")
+    @Column("NORMTEXT")
     private String notes;
 
     // === Berechnete Felder ===

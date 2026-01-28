@@ -190,23 +190,30 @@ public class BeladungProcessorService {
 
             // Prüfen ob noch Barren zu laden sind
             if (!stateService.hasGeplanteBarren() && !commandSent) {
-                log.info("Keine weiteren Barren geplant - Beladung abgeschlossen");
+                log.info("=== BELADUNG ABGESCHLOSSEN ===");
+                log.info("  hasGeplanteBarren={}, commandSent={}", stateService.hasGeplanteBarren(), commandSent);
+                log.info("  geladeneCount={}", stateService.getGeladeneCount());
                 stateService.setBeladungLaeuft(false);
 
                 // Lieferschein erstellen BEVOR wir stoppen
+                log.info(">>> Starte erstelleLieferschein()...");
                 Shipment shipment = erstelleLieferschein();
+                log.info(">>> erstelleLieferschein() returned: {}", shipment != null ? "Shipment ID=" + shipment.getId() : "NULL");
 
                 stop();
 
                 // Broadcast mit Shipment-Info (damit alle Views benachrichtigt werden)
                 if (shipment != null) {
-                    log.info(">>> BROADCAST BELADUNG_ENDED mit Shipment: {}", shipment.getShipmentNumber());
+                    log.info(">>> BROADCAST BELADUNG_ENDED mit Shipment: ID={}, Nr={}",
+                        shipment.getId(), shipment.getShipmentNumber());
                     broadcaster.broadcastBeladungEndedWithShipment(
                         stateService.getGeladeneCount(),
                         shipment.getId(),
                         shipment.getShipmentNumber()
                     );
+                    log.info(">>> BROADCAST GESENDET!");
                 } else {
+                    log.error("!!! KEIN SHIPMENT - Sende nur Status-Broadcast !!!");
                     broadcastStatus();
                 }
                 return;
@@ -336,8 +343,18 @@ public class BeladungProcessorService {
 
         log.info("Sende Ladebefehl: {} von {} -> TRAILER",
             ingot.getIngotNo(), sourceYard.getYardNumber());
+        log.info("  Stockyard Koordinaten: X={}, Y={}, Z={} (Grid: {}/{})",
+            sourceYard.getXPosition(), sourceYard.getYPosition(), sourceYard.getZPosition(),
+            sourceYard.getXCoordinate(), sourceYard.getYCoordinate());
 
         int pickupZ = sourceYard.getZPosition() > 0 ? sourceYard.getZPosition() : 2000;
+
+        // WARNUNG wenn Koordinaten nicht gesetzt sind
+        if (sourceYard.getXPosition() == 0 || sourceYard.getYPosition() == 0) {
+            log.error("!!! WARNUNG: Stockyard {} hat keine Kran-Koordinaten (X={}, Y={}) !!!",
+                sourceYard.getYardNumber(), sourceYard.getXPosition(), sourceYard.getYPosition());
+            log.error("!!! Bitte BOTTOM_CENTER_X/Y in MD_STOCKYARD setzen !!!");
+        }
 
         // Kommando an Simulator/SPS senden
         try {
@@ -420,11 +437,22 @@ public class BeladungProcessorService {
      * Erstellt den Lieferschein (Shipment) nach Abschluss der Beladung
      */
     private Shipment erstelleLieferschein() {
+        log.info(">>> erstelleLieferschein() START");
+
         List<IngotDTO> geladeneBarren = stateService.getGeladeneBarren();
+        log.info(">>> geladeneBarren.size() = {}", geladeneBarren.size());
 
         if (geladeneBarren.isEmpty()) {
-            log.warn("Keine geladenen Barren für Lieferschein!");
+            log.error("!!! KEINE GELADENEN BARREN FÜR LIEFERSCHEIN - Liste ist leer !!!");
+            log.error("!!! StateService.geladeneCount = {}", stateService.getGeladeneCount());
             return null;
+        }
+
+        // Debug: Alle geladenen Barren auflisten
+        for (int i = 0; i < geladeneBarren.size(); i++) {
+            IngotDTO b = geladeneBarren.get(i);
+            log.info(">>> Geladener Barren [{}]: id={}, nr={}, gewicht={}",
+                i, b.getId(), b.getIngotNo(), b.getWeight());
         }
 
         try {
@@ -435,12 +463,14 @@ public class BeladungProcessorService {
 
             log.info("=== ERSTELLE LIEFERSCHEIN ===");
             log.info("  Barren: {}", geladeneBarren.size());
-            log.info("  Auftrag: {}, Ziel: {}", orderNumber, destination);
+            log.info("  Auftrag: {}, Ziel: {}, Kunde: {}", orderNumber, destination, customerNumber);
 
+            log.info(">>> Rufe shipmentService.createShipment() auf...");
             Shipment shipment = shipmentService.createShipment(
                 orderNumber, destination, customerNumber, customerAddress,
                 new ArrayList<>(geladeneBarren)
             );
+            log.info(">>> shipmentService.createShipment() erfolgreich!");
 
             log.info("  Shipment erstellt: ID={}, Nr={}", shipment.getId(), shipment.getShipmentNumber());
 
@@ -454,10 +484,14 @@ public class BeladungProcessorService {
                 }
             }
 
+            log.info(">>> erstelleLieferschein() ERFOLGREICH - return shipment");
             return shipment;
 
         } catch (Exception e) {
-            log.error("Fehler beim Erstellen des Lieferscheins: {}", e.getMessage(), e);
+            log.error("!!! FEHLER beim Erstellen des Lieferscheins !!!");
+            log.error("!!! Exception-Typ: {}", e.getClass().getName());
+            log.error("!!! Message: {}", e.getMessage());
+            log.error("!!! Stack-Trace:", e);
             return null;
         }
     }

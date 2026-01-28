@@ -49,49 +49,99 @@ public class StockyardService {
     }
     
     /**
-     * Lädt alle Lagerplätze für die Stock-View mit Status-Informationen
+     * Lädt alle Lagerplätze für die Stock-View mit Status-Informationen.
+     * WICHTIG: Berechnet die tatsächliche Barren-Anzahl aus TD_INGOT statt aus dem Cache.
      */
     public Map<Long, StockyardDTO> findAllForStockView() {
         log.debug("Loading all stockyards for stock view");
-        
+
         List<Stockyard> stockyards = stockyardRepository.findAllForStockView();
         log.debug("Found {} stockyards", stockyards.size());
-        
+
         // Alle IDs sammeln
         List<Long> stockyardIds = stockyards.stream()
             .map(Stockyard::getId)
             .collect(Collectors.toList());
-        
-        // Status für alle Lagerplätze laden
+
+        // Status für alle Lagerplätze laden (als Basis für andere Felder)
         Map<Long, StockyardStatus> statusMap = statusRepository.findByStockyardIdIn(stockyardIds)
             .stream()
             .collect(Collectors.toMap(StockyardStatus::getStockyardId, s -> s));
-        
+
+        // TATSÄCHLICHE Barren-Anzahl aus TD_INGOT zählen (nicht aus Cache!)
+        Map<Long, Integer> actualCounts = getActualIngotCounts();
+
         // DTOs erstellen
         Map<Long, StockyardDTO> result = new LinkedHashMap<>();
-        
+
         for (Stockyard yard : stockyards) {
             StockyardDTO dto = toDTO(yard);
 
             // Status hinzufügen
             StockyardStatus status = statusMap.get(yard.getId());
             if (status != null) {
-                dto.setStatus(toStatusDTO(status, yard.getMaxIngots()));
+                StockyardStatusDTO statusDTO = toStatusDTO(status, yard.getMaxIngots());
+
+                // WICHTIG: Tatsächliche Anzahl aus TD_INGOT verwenden!
+                Integer actualCount = actualCounts.getOrDefault(yard.getId(), 0);
+                if (statusDTO.getIngotsCount() != actualCount) {
+                    log.debug("Stockyard {} count mismatch: cached={}, actual={}",
+                        yard.getYardNumber(), statusDTO.getIngotsCount(), actualCount);
+                }
+                statusDTO.setIngotsCount(actualCount);
+                statusDTO.setEmpty(actualCount == 0);
+                statusDTO.setFull(actualCount >= yard.getMaxIngots());
+
+                dto.setStatus(statusDTO);
+            } else {
+                // Kein Status, aber vielleicht trotzdem Barren vorhanden?
+                Integer actualCount = actualCounts.getOrDefault(yard.getId(), 0);
+                if (actualCount > 0) {
+                    log.warn("Stockyard {} hat {} Barren aber keinen Status-Eintrag!",
+                        yard.getYardNumber(), actualCount);
+                    // Virtuellen Status erstellen
+                    StockyardStatusDTO virtualStatus = new StockyardStatusDTO();
+                    virtualStatus.setStockyardId(yard.getId());
+                    virtualStatus.setIngotsCount(actualCount);
+                    virtualStatus.setEmpty(false);
+                    virtualStatus.setFull(actualCount >= yard.getMaxIngots());
+                    dto.setStatus(virtualStatus);
+                }
             }
 
             // Debug für SAW-Plätze
             if (yard.getType() == com.hydro.plsbl.entity.enums.StockyardType.SAW) {
-                log.info("SAW stockyard loaded: {} (ID={}) - hasStatus={}, ingotsCount={}",
-                    yard.getYardNumber(), yard.getId(),
-                    status != null,
-                    status != null ? status.getIngotsCount() : 0);
+                int count = dto.getStatus() != null ? dto.getStatus().getIngotsCount() : 0;
+                log.info("SAW stockyard loaded: {} (ID={}) - ingotsCount={}",
+                    yard.getYardNumber(), yard.getId(), count);
             }
 
             result.put(dto.getId(), dto);
         }
-        
+
         log.debug("Returning {} stockyard DTOs", result.size());
         return result;
+    }
+
+    /**
+     * Zählt die tatsächliche Anzahl der Barren pro Lagerplatz aus TD_INGOT.
+     * Dies ist die korrekte Quelle - nicht der gecachte Wert in TD_STOCKYARDSTATUS.
+     */
+    private Map<Long, Integer> getActualIngotCounts() {
+        Map<Long, Integer> counts = new HashMap<>();
+        try {
+            jdbcTemplate.query(
+                "SELECT STOCKYARD_ID, COUNT(*) as CNT FROM TD_INGOT " +
+                "WHERE STOCKYARD_ID IS NOT NULL GROUP BY STOCKYARD_ID",
+                rs -> {
+                    Long stockyardId = rs.getLong("STOCKYARD_ID");
+                    int count = rs.getInt("CNT");
+                    counts.put(stockyardId, count);
+                });
+        } catch (Exception e) {
+            log.warn("Konnte Barren-Anzahl nicht zählen: {}", e.getMessage());
+        }
+        return counts;
     }
     
     /**

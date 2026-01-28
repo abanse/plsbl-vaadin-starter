@@ -76,10 +76,12 @@ public class IngotService {
 
     /**
      * Findet verfügbare Barren für einen Abruf (Lieferung)
+     * Filter:
      * - Barren mit passendem Produkt
      * - Auf Lager (STOCKYARD_ID != null)
+     * - Nicht auf externem Lagerplatz (YARD_TYPE != 'E')
+     * - Auslagern erlaubt (FROM_STOCK_ALLOWED = 1)
      * - Nicht Schrott
-     * - Freigegeben (RELEASED_SINCE IS NOT NULL)
      * - Nicht mit Korrektur (REVISED = 0 oder NULL)
      */
     public List<IngotDTO> findAvailableForDelivery(Long productId) {
@@ -93,30 +95,30 @@ public class IngotService {
             Integer notScrap = jdbcTemplate.queryForObject(
                 "SELECT COUNT(*) FROM TD_INGOT WHERE PRODUCT_ID = ? AND STOCKYARD_ID IS NOT NULL AND (SCRAP IS NULL OR SCRAP = 0)",
                 Integer.class, productId);
-            Integer released = jdbcTemplate.queryForObject(
-                "SELECT COUNT(*) FROM TD_INGOT WHERE PRODUCT_ID = ? AND STOCKYARD_ID IS NOT NULL AND RELEASED_SINCE IS NOT NULL",
+            Integer fromStockAllowed = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM TD_INGOT i JOIN MD_STOCKYARD s ON i.STOCKYARD_ID = s.ID " +
+                "WHERE i.PRODUCT_ID = ? AND s.FROM_STOCK_ALLOWED = 1",
                 Integer.class, productId);
-            Integer notRevised = jdbcTemplate.queryForObject(
-                "SELECT COUNT(*) FROM TD_INGOT WHERE PRODUCT_ID = ? AND STOCKYARD_ID IS NOT NULL AND (REVISED IS NULL OR REVISED = 0)",
-                Integer.class, productId);
-            log.info("Diagnose für PRODUCT_ID={}: Gesamt={}, NichtSchrott={}, Freigegeben={}, NichtKorrigiert={}",
-                productId, total, notScrap, released, notRevised);
+            log.info("Diagnose für PRODUCT_ID={}: Gesamt={}, NichtSchrott={}, Auslagern-erlaubt={}",
+                productId, total, notScrap, fromStockAllowed);
         } catch (Exception e) {
             log.warn("Diagnose fehlgeschlagen: {}", e.getMessage());
         }
 
-        // Erst ohne die strengen Filter um zu sehen ob es überhaupt Daten gibt
+        // Filter: Extern ausschliessen, Auslagern muss erlaubt sein, kein Schrott
         String sql = """
             SELECT i.*, s.YARD_NO as STOCKYARD_NO, p.PRODUCT_NO
             FROM TD_INGOT i
-            LEFT JOIN MD_STOCKYARD s ON i.STOCKYARD_ID = s.ID
+            JOIN MD_STOCKYARD s ON i.STOCKYARD_ID = s.ID
             LEFT JOIN MD_PRODUCT p ON i.PRODUCT_ID = p.ID
             WHERE i.PRODUCT_ID = ?
               AND i.STOCKYARD_ID IS NOT NULL
               AND (i.SCRAP IS NULL OR i.SCRAP = 0)
+              AND s.YARD_TYPE != 'E'
+              AND s.FROM_STOCK_ALLOWED = 1
             ORDER BY s.YARD_NO, i.PILE_POSITION DESC
             """;
-        // Filter für Freigabe und Korrektur werden im Java-Code geprüft und geloggt
+        // Filter fuer Korrektur werden im Java-Code geprueft und geloggt
 
         List<IngotDTO> allIngots = jdbcTemplate.query(sql, (rs, rowNum) -> {
             IngotDTO dto = new IngotDTO();
@@ -200,20 +202,47 @@ public class IngotService {
     }
 
     /**
-     * Findet alle Barren die im Lager sind (haben einen Lagerplatz)
-     * Für Beladungs-Tests wenn kein spezifisches Produkt zugeordnet ist
+     * Findet alle Barren die im Lager sind und vom Kran geliefert werden koennen.
+     * Filter:
+     * - YARD_TYPE != 'E' (externe Plaetze nur per Stapler erreichbar)
+     * - FROM_STOCK_ALLOWED = 1 (Auslagern muss erlaubt sein)
+     * - SCRAP = 0 (kein Schrott)
      */
     public List<IngotDTO> findAllInStock() {
-        log.info("Loading all ingots in stock (regardless of product)");
+        log.info("=== findAllInStock START ===");
 
+        // Diagnostik: Wie viele Barren mit welchen Filtern?
+        try {
+            Integer total = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM TD_INGOT WHERE STOCKYARD_ID IS NOT NULL", Integer.class);
+            Integer notScrap = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM TD_INGOT WHERE STOCKYARD_ID IS NOT NULL AND (SCRAP IS NULL OR SCRAP = 0)", Integer.class);
+            Integer craneAccessible = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM TD_INGOT i JOIN MD_STOCKYARD s ON i.STOCKYARD_ID = s.ID WHERE s.YARD_TYPE != 'E'", Integer.class);
+            Integer fromStockAllowed = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM TD_INGOT i JOIN MD_STOCKYARD s ON i.STOCKYARD_ID = s.ID WHERE s.FROM_STOCK_ALLOWED = 1", Integer.class);
+            Integer deliverable = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM TD_INGOT i JOIN MD_STOCKYARD s ON i.STOCKYARD_ID = s.ID " +
+                "WHERE s.YARD_TYPE != 'E' AND s.FROM_STOCK_ALLOWED = 1 AND (i.SCRAP IS NULL OR i.SCRAP = 0)", Integer.class);
+            log.info("Diagnose: Gesamt={}, NichtSchrott={}, Kran-erreichbar={}, Auslagern-erlaubt={}, Lieferbar={}",
+                total, notScrap, craneAccessible, fromStockAllowed, deliverable);
+        } catch (Exception e) {
+            log.warn("Diagnose fehlgeschlagen: {}", e.getMessage());
+        }
+
+        // Query mit allen Filtern:
+        // - Nicht extern (YARD_TYPE != 'E')
+        // - Auslagern erlaubt (FROM_STOCK_ALLOWED = 1)
+        // - Kein Schrott
         String sql = """
             SELECT i.*, s.YARD_NO as STOCKYARD_NO, p.PRODUCT_NO as PRODUCT_NUMBER
             FROM TD_INGOT i
-            LEFT JOIN MD_STOCKYARD s ON i.STOCKYARD_ID = s.ID
+            JOIN MD_STOCKYARD s ON i.STOCKYARD_ID = s.ID
             LEFT JOIN MD_PRODUCT p ON i.PRODUCT_ID = p.ID
             WHERE i.STOCKYARD_ID IS NOT NULL
               AND (i.SCRAP IS NULL OR i.SCRAP = 0)
-              AND i.RELEASED_SINCE IS NULL
+              AND s.YARD_TYPE != 'E'
+              AND s.FROM_STOCK_ALLOWED = 1
             ORDER BY s.YARD_NO, i.PILE_POSITION DESC
             """;
 
@@ -237,7 +266,7 @@ public class IngotService {
             return dto;
         });
 
-        log.info("Found {} ingots in stock", result.size());
+        log.info("=== findAllInStock ENDE: {} Barren gefunden ===", result.size());
         return result;
     }
 
@@ -364,10 +393,13 @@ public class IngotService {
 
         // Barren vom Lagerplatz entfernen
         jdbcTemplate.update(
-            "UPDATE TD_INGOT SET STOCKYARD_ID = NULL, PILE_POSITION = NULL WHERE ID = ?", ingotId);
+            "UPDATE TD_INGOT SET STOCKYARD_ID = NULL, PILE_POSITION = NULL, SERIAL = SERIAL + 1 WHERE ID = ?", ingotId);
 
-        // StockyardStatus aktualisieren
+        // Stapelpositionen der verbleibenden Barren neu berechnen
         if (stockyardId != null) {
+            recalculatePilePositions(stockyardId);
+
+            // StockyardStatus aktualisieren
             stockyardStatusRepository.findByStockyardId(stockyardId).ifPresent(status -> {
                 int newCount = Math.max(0, status.getIngotsCount() - 1);
                 if (newCount == 0) {
@@ -556,32 +588,75 @@ public class IngotService {
     }
 
     /**
-     * Lagert einen Barren auf einen anderen Lagerplatz um
+     * Lagert einen Barren auf einen anderen Lagerplatz um.
+     * Bei destinationStockyardId = null wird der Barren vom Lager entfernt (z.B. auf LKW geladen).
      */
     @Transactional
     public void relocate(Long ingotId, Long destinationStockyardId) {
-        log.debug("Relocating ingot {} to stockyard {}", ingotId, destinationStockyardId);
+        log.info("Relocating ingot {} to stockyard {}", ingotId, destinationStockyardId);
 
         Ingot ingot = ingotRepository.findById(ingotId)
             .orElseThrow(() -> new IllegalArgumentException("Barren nicht gefunden: " + ingotId));
 
         Long sourceStockyardId = ingot.getStockyardId();
+        Integer oldPilePosition = ingot.getPilePosition();
         Long productId = ingot.getProductId();
+
+        log.info("  Quelle: Lagerplatz={}, Position={}", sourceStockyardId, oldPilePosition);
 
         ingot.markNotNew();
         ingot.setStockyardId(destinationStockyardId);
 
-        // Neue Stapel-Position ermitteln (oberster Platz)
-        int newPosition = countByStockyardId(destinationStockyardId) + 1;
-        ingot.setPilePosition(newPosition);
+        if (destinationStockyardId == null) {
+            // Barren wird vom Lager entfernt (z.B. auf LKW)
+            ingot.setPilePosition(null);
+            log.info("  Barren {} wird aus Lager entfernt (STOCKYARD_ID=NULL, PILE_POSITION=NULL)",
+                ingot.getIngotNo());
+        } else {
+            // Auf neuen Lagerplatz - oberste Position
+            int newPosition = countByStockyardId(destinationStockyardId) + 1;
+            ingot.setPilePosition(newPosition);
+            log.info("  Barren {} wird auf Lagerplatz {} Position {} gelegt",
+                ingot.getIngotNo(), destinationStockyardId, newPosition);
+        }
 
         ingotRepository.save(ingot);
+
+        // Stapelpositionen der verbleibenden Barren auf dem Quell-Lagerplatz neu berechnen
+        if (sourceStockyardId != null) {
+            recalculatePilePositions(sourceStockyardId);
+        }
 
         // StockyardStatus aktualisieren
         updateStockyardStatusAfterRelocate(sourceStockyardId, destinationStockyardId, productId);
 
-        log.info("Ingot {} relocated to stockyard {} at position {}",
-            ingotId, destinationStockyardId, newPosition);
+        log.info("Ingot {} relocated: {} -> {} (position: {} -> {})",
+            ingotId, sourceStockyardId, destinationStockyardId,
+            oldPilePosition, ingot.getPilePosition());
+    }
+
+    /**
+     * Berechnet die Stapelpositionen aller Barren auf einem Lagerplatz neu.
+     * Wird aufgerufen nachdem ein Barren entfernt wurde um Lücken zu schließen.
+     * Aktualisiert auch SERIAL für Versionskontrolle.
+     */
+    private void recalculatePilePositions(Long stockyardId) {
+        log.info("Recalculating pile positions for stockyard {}", stockyardId);
+
+        // Alle Barren auf dem Platz holen, sortiert nach aktueller Position
+        List<Long> ingotIds = jdbcTemplate.queryForList(
+            "SELECT ID FROM TD_INGOT WHERE STOCKYARD_ID = ? ORDER BY PILE_POSITION ASC NULLS LAST",
+            Long.class, stockyardId);
+
+        // Neue fortlaufende Positionen vergeben (1, 2, 3, ...) und SERIAL erhöhen
+        for (int i = 0; i < ingotIds.size(); i++) {
+            int newPosition = i + 1;
+            jdbcTemplate.update(
+                "UPDATE TD_INGOT SET PILE_POSITION = ?, SERIAL = SERIAL + 1 WHERE ID = ?",
+                newPosition, ingotIds.get(i));
+        }
+
+        log.info("  {} Barren neu nummeriert (1..{})", ingotIds.size(), ingotIds.size());
     }
 
     /**
@@ -604,7 +679,12 @@ public class IngotService {
             }
         });
 
-        // 2. Ziel: Anzahl erhöhen oder neuen Status erstellen
+        // 2. Ziel: Anzahl erhöhen oder neuen Status erstellen (nur wenn Ziel vorhanden)
+        if (destinationStockyardId == null) {
+            log.debug("No destination stockyard - skipping destination status update");
+            return;
+        }
+
         Optional<StockyardStatus> destStatus = stockyardStatusRepository.findByStockyardId(destinationStockyardId);
         if (destStatus.isPresent()) {
             // Anzahl erhöhen - direkt per SQL um Versionsprobleme zu vermeiden

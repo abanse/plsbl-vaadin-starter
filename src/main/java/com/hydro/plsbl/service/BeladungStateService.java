@@ -2,6 +2,8 @@ package com.hydro.plsbl.service;
 
 import com.hydro.plsbl.dto.IngotDTO;
 import com.vaadin.flow.spring.annotation.VaadinSessionScope;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -14,6 +16,8 @@ import java.util.List;
 @Service
 @VaadinSessionScope
 public class BeladungStateService {
+
+    private static final Logger log = LoggerFactory.getLogger(BeladungStateService.class);
 
     private boolean beladungAktiv = false;
     private boolean beladungLaeuft = false;
@@ -80,10 +84,12 @@ public class BeladungStateService {
     }
 
     public void setGeplanteBarren(List<IngotDTO> geplanteBarren) {
+        log.info(">>> setGeplanteBarren: {} Barren", geplanteBarren.size());
         this.geplanteBarren = new ArrayList<>(geplanteBarren);
     }
 
     public List<IngotDTO> getGeladeneBarren() {
+        log.debug(">>> getGeladeneBarren() called: returning {} Barren", geladeneBarren.size());
         return geladeneBarren;
     }
 
@@ -116,12 +122,16 @@ public class BeladungStateService {
     /**
      * Verschiebt einen Barren von geplant nach geladen
      */
-    public IngotDTO moveBarrenToGeladen() {
+    public synchronized IngotDTO moveBarrenToGeladen() {
+        log.info(">>> moveBarrenToGeladen: geplant={}, geladen={}", geplanteBarren.size(), geladeneBarren.size());
         if (!geplanteBarren.isEmpty()) {
             IngotDTO barren = geplanteBarren.remove(0);
             geladeneBarren.add(barren);
+            log.info(">>> Barren {} verschoben: geplant={}, geladen={}",
+                barren.getIngotNo(), geplanteBarren.size(), geladeneBarren.size());
             return barren;
         }
+        log.warn(">>> moveBarrenToGeladen: Keine geplanten Barren!");
         return null;
     }
 

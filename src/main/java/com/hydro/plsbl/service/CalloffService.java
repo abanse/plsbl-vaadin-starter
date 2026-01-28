@@ -12,6 +12,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import jakarta.annotation.PostConstruct;
+import org.springframework.beans.factory.ObjectProvider;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.LocalDate;
@@ -34,12 +35,15 @@ public class CalloffService {
     private final CalloffRepository calloffRepository;
     private final JdbcTemplate jdbcTemplate;
     private final DataBroadcaster dataBroadcaster;
+    private final ObjectProvider<AutoRetrievalService> autoRetrievalServiceProvider;
 
     public CalloffService(CalloffRepository calloffRepository, JdbcTemplate jdbcTemplate,
-                          DataBroadcaster dataBroadcaster) {
+                          DataBroadcaster dataBroadcaster,
+                          ObjectProvider<AutoRetrievalService> autoRetrievalServiceProvider) {
         this.calloffRepository = calloffRepository;
         this.jdbcTemplate = jdbcTemplate;
         this.dataBroadcaster = dataBroadcaster;
+        this.autoRetrievalServiceProvider = autoRetrievalServiceProvider;
     }
 
     /**
@@ -451,7 +455,8 @@ public class CalloffService {
     // === Mutation Methods ===
 
     /**
-     * Genehmigt einen Abruf
+     * Genehmigt einen Abruf.
+     * Prueft anschliessend ob automatische Auslagerung fuer MITTEL-Barren erforderlich ist.
      */
     @Transactional
     public void approve(Long calloffId) {
@@ -463,6 +468,20 @@ public class CalloffService {
             log.info("Calloff {} genehmigt, sende Broadcast...", calloff.getCalloffNumber());
             dataBroadcaster.broadcast(DataBroadcaster.DataEventType.CALLOFF_CHANGED);
             log.info("Broadcast CALLOFF_CHANGED gesendet");
+
+            // Auto-Auslagerung pruefen (fuer MITTEL-Barren mit autoRetrieval=true)
+            try {
+                AutoRetrievalService autoRetrievalService = autoRetrievalServiceProvider.getIfAvailable();
+                if (autoRetrievalService != null) {
+                    CalloffDTO calloffDTO = new CalloffDTO(calloff);
+                    int anforderungen = autoRetrievalService.processCalloffApproval(calloffDTO);
+                    if (anforderungen > 0) {
+                        log.info("Auto-Auslagerung: {} Stapler-Anforderungen erstellt", anforderungen);
+                    }
+                }
+            } catch (Exception e) {
+                log.warn("Fehler bei Auto-Auslagerung (nicht kritisch): {}", e.getMessage());
+            }
         });
     }
 
@@ -673,11 +692,24 @@ public class CalloffService {
             criteria.isIncompleteOnly(), criteria.isCompletedOnly(), criteria.isNotApprovedOnly());
 
         try {
+            log.info("=== CALLOFF SUCHE START ===");
+            log.info("SQL: {}", sql);
+            log.info("Parameter: {}", params);
             List<CalloffDTO> results = jdbcTemplate.query(sql.toString(), params.toArray(), new CalloffRowMapper());
             log.info("Calloff-Suche ergab {} Treffer", results.size());
+            if (!results.isEmpty()) {
+                log.info("Erster Treffer: {} (ProductId={}, Remaining={})",
+                    results.get(0).getCalloffNumber(),
+                    results.get(0).getProductId(),
+                    results.get(0).getRemainingAmount());
+            }
+            log.info("=== CALLOFF SUCHE ENDE ===");
             return results;
         } catch (Exception e) {
-            log.error("Fehler bei der Suche nach Abrufen: {} - SQL: {}", e.getMessage(), sql, e);
+            log.error("!!! CALLOFF SUCHE FEHLER !!!");
+            log.error("SQL: {}", sql);
+            log.error("Exception: {} - {}", e.getClass().getName(), e.getMessage());
+            e.printStackTrace();
             return List.of();
         }
     }

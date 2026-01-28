@@ -63,8 +63,20 @@ public class ShipmentService {
         log.info("Erstelle Lieferschein für {} Barren, Auftrag: {}, Ziel: {}, Kunde: {}",
             ingots.size(), orderNumber, destination, customerNumber);
 
+        if (ingots == null || ingots.isEmpty()) {
+            log.error("!!! KEINE BARREN FÜR LIEFERSCHEIN !!!");
+            throw new IllegalArgumentException("Keine Barren für Lieferschein angegeben");
+        }
+
         // Neue Lieferschein-Nummer generieren
-        String shipmentNumber = generateShipmentNumber();
+        String shipmentNumber;
+        try {
+            shipmentNumber = generateShipmentNumber();
+            log.info("Lieferschein-Nummer generiert: {}", shipmentNumber);
+        } catch (Exception e) {
+            log.error("Fehler bei Nummern-Generierung: {}", e.getMessage(), e);
+            throw e;
+        }
 
         // Lieferschein erstellen
         Shipment shipment = new Shipment();
@@ -76,33 +88,47 @@ public class ShipmentService {
         shipment.setDelivered(LocalDateTime.now());
 
         // Speichern um ID zu bekommen
-        shipment = saveShipment(shipment);
+        try {
+            shipment = saveShipment(shipment);
+            log.info("Lieferschein gespeichert: ID={}", shipment.getId());
+        } catch (Exception e) {
+            log.error("!!! FEHLER BEIM SPEICHERN DES LIEFERSCHEINS !!!");
+            log.error("SQL-Fehler: {}", e.getMessage(), e);
+            throw e;
+        }
+
         final Long shipmentId = shipment.getId();
 
         // Positionen erstellen
         int position = 1;
         for (IngotDTO ingot : ingots) {
-            ShipmentLine line = new ShipmentLine();
-            line.setShipmentId(shipmentId);
-            line.setPosition(position++);
-            line.setIngotId(ingot.getId());
-            line.setIngotNumber(ingot.getIngotNo());
-            line.setWeight(ingot.getWeight());
-            line.setLength(ingot.getLength());
-            line.setWidth(ingot.getWidth());
-            line.setThickness(ingot.getThickness());
-            line.setHeadSawn(ingot.getHeadSawn());
-            line.setFootSawn(ingot.getFootSawn());
-            line.setScrap(ingot.getScrap());
-            line.setRevised(ingot.getRevised());
-            line.setProductNumber(ingot.getProductNo());
-            // SAP-Produktnummer aus Produkt-Nummer ableiten (vereinfacht)
-            line.setSapProductNumber(ingot.getProductNo());
+            try {
+                ShipmentLine line = new ShipmentLine();
+                line.setShipmentId(shipmentId);
+                line.setPosition(position++);
+                line.setIngotId(ingot.getId());
+                line.setIngotNumber(ingot.getIngotNo());
+                line.setWeight(ingot.getWeight());
+                line.setLength(ingot.getLength());
+                line.setWidth(ingot.getWidth());
+                line.setThickness(ingot.getThickness());
+                line.setHeadSawn(ingot.getHeadSawn());
+                line.setFootSawn(ingot.getFootSawn());
+                line.setScrap(ingot.getScrap());
+                line.setRevised(ingot.getRevised());
+                line.setProductNumber(ingot.getProductNo());
+                line.setSapProductNumber(ingot.getProductNo());
 
-            saveShipmentLine(line);
+                saveShipmentLine(line);
+                log.info("  Position {} gespeichert: Barren {}", position - 1, ingot.getIngotNo());
 
-            // Barren als geliefert markieren (vom Lager entfernen)
-            markIngotAsDelivered(ingot.getId());
+                // Barren als geliefert markieren (vom Lager entfernen falls noch nicht geschehen)
+                markIngotAsDelivered(ingot.getId());
+            } catch (Exception e) {
+                log.error("!!! FEHLER BEI POSITION {} (Barren {}) !!!", position - 1, ingot.getIngotNo());
+                log.error("SQL-Fehler: {}", e.getMessage(), e);
+                throw e;
+            }
         }
 
         log.info("=== SHIPMENT CREATED SUCCESSFULLY ===");
@@ -111,15 +137,28 @@ public class ShipmentService {
     }
 
     /**
-     * Markiert einen Barren als geliefert (entfernt ihn vom Lagerplatz)
+     * Markiert einen Barren als geliefert (entfernt ihn vom Lagerplatz).
+     * Prüft ob der Barren noch auf einem Lagerplatz ist bevor relocate aufgerufen wird.
      */
     @Transactional
     public void markIngotAsDelivered(Long ingotId) {
-        log.debug("Markiere Barren {} als geliefert", ingotId);
+        log.info("Markiere Barren {} als geliefert", ingotId);
 
+        // Prüfen ob Barren noch auf einem Lagerplatz ist
+        // (BeladungProcessorService hat ihn evtl. schon entfernt)
+        ingotRepository.findById(ingotId).ifPresent(ingot -> {
+            if (ingot.getStockyardId() != null) {
+                // Barren ist noch auf Lagerplatz - entfernen
+                log.info("  Barren {} ist noch auf Platz {}, entferne...", ingotId, ingot.getStockyardId());
+                ingotService.relocate(ingotId, null);
+            } else {
+                log.info("  Barren {} ist bereits vom Lagerplatz entfernt", ingotId);
+            }
+        });
+
+        // RELEASED_SINCE setzen
         ingotRepository.findById(ingotId).ifPresent(ingot -> {
             ingot.markNotNew();
-            ingot.setStockyardId(null);  // Vom Lagerplatz entfernen
             ingot.setReleasedSince(LocalDateTime.now());
             ingotRepository.save(ingot);
             log.info("Barren {} wurde als geliefert markiert", ingot.getIngotNo());
@@ -184,12 +223,13 @@ public class ShipmentService {
             line.setId(newId);
         }
 
+        // Oracle-Tabelle HAT ON_TRUCK Spalte (NOT NULL)!
         String sql = """
             INSERT INTO TD_SHIPMENTLINE
             (ID, SERIAL, SHIPMENT_ID, SHIPMENT_POS, INGOT_NO, INGOT_ID, INGOT_COMMENT,
              WEIGHT, LENGTH, THICKNESS, WIDTH, HEAD_SAWN, FOOT_SAWN, SCRAP, REVISED,
              PRODUCT_NO, SAP_PRODUCT_NO, CALLOFF_NO, ORDER_POS, ON_TRUCK)
-            VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+            VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
             """;
 
         // Truncate string fields to match actual Oracle column sizes
@@ -209,7 +249,7 @@ public class ShipmentService {
             boolToInt(line.getScrap()),
             boolToInt(line.getRevised()),
             truncate(line.getProductNumber(), 50),
-            truncate(line.getSapProductNumber(), 9),  // Actual Oracle column is only 9 chars
+            truncate(line.getSapProductNumber(), 9),
             truncate(line.getCalloffNumber(), 50),
             truncate(line.getOrderPosition(), 50)
         );
