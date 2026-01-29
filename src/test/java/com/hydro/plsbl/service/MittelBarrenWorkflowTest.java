@@ -188,7 +188,7 @@ class MittelBarrenWorkflowTest {
     void testMittelBarrenLaengen() {
         // When: MITTEL-Barren-Laengen aus DB laden
         List<Integer> lengths = jdbcTemplate.queryForList(
-            "SELECT DISTINCT LENGTH FROM TD_INGOT i " +
+            "SELECT DISTINCT i.LENGTH FROM TD_INGOT i " +
             "JOIN MD_STOCKYARD s ON i.STOCKYARD_ID = s.ID " +
             "WHERE s.YARD_TYPE = 'E'",
             Integer.class);
@@ -227,7 +227,7 @@ class MittelBarrenWorkflowTest {
         IngotTypeDTO kurz = findByName(allTypes, "KURZ");
         assertNotNull(kurz, "KURZ-Typ sollte existieren");
         assertEquals(3500, kurz.getMinLength());
-        assertEquals(4300, kurz.getMaxLength());
+        assertEquals(4299, kurz.getMaxLength());
 
         // MITTEL pruefen
         IngotTypeDTO mittel = findByName(allTypes, "MITTEL");

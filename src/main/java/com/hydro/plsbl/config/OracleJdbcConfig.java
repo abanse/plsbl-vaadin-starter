@@ -2,6 +2,7 @@ package com.hydro.plsbl.config;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Profile;
 import org.springframework.core.convert.converter.Converter;
 import org.springframework.data.convert.ReadingConverter;
 import org.springframework.data.convert.WritingConverter;
@@ -15,6 +16,7 @@ import java.util.Arrays;
  * Konfiguration für Oracle-spezifische JDBC-Konvertierungen
  */
 @Configuration
+@Profile("oracle")
 public class OracleJdbcConfig extends AbstractJdbcConfiguration {
 
     @Override
