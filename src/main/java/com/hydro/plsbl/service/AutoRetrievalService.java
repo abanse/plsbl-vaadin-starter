@@ -328,13 +328,13 @@ public class AutoRetrievalService {
 
     /**
      * Prueft ob fuer einen Abruf bereits offene Stapler-Anforderungen existieren.
+     * Filtert nach CALLOFF_ID statt NORMTEXT-Pattern fuer Robustheit.
      */
     private boolean hasOpenStaplerAnforderung(Long calloffId) {
         try {
             Integer count = jdbcTemplate.queryForObject(
                 "SELECT COUNT(*) FROM TD_TRANSPORTORDER " +
                 "WHERE CALLOFF_ID = ? " +
-                "AND NORMTEXT LIKE '%AUTO-AUSLAGERUNG%' " +
                 "AND STATUS IN ('P', 'I', 'U', 'H')",
                 Integer.class, calloffId);
             return count != null && count > 0;

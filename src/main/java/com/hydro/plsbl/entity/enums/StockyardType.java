@@ -29,9 +29,10 @@ public enum StockyardType {
     
     /**
      * Wird dieser Typ in der Lager-Ansicht angezeigt?
+     * SWAPIN-Plaetze sind Stapler-Anlieferplaetze und werden nicht im Grid angezeigt.
      */
     public boolean isShownInStockView() {
-        return this == INTERNAL || this == EXTERNAL || this == LOADING || this == SAW || this == SWAPOUT || this == SWAPIN;
+        return this == INTERNAL || this == EXTERNAL || this == LOADING || this == SAW || this == SWAPOUT;
     }
     
     public static StockyardType fromCode(char code) {

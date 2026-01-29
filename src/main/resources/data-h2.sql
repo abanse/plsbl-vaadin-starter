@@ -27,7 +27,7 @@ INSERT INTO MD_PRODUCT (ID, SERIAL, PRODUCT_NO, DESCRIPTION, MAX_PER_LOCATION) V
 -- Barrentypen (basierend auf barrentypen.xls)
 -- SAW_TO_SWAPOUT: TRUE = Barren wird von Säge auf Ausgang-Platz gelegt (für Stapler-Transport zu externen Plätzen)
 INSERT INTO MD_INGOTTYPE (ID, SERIAL, NAME, DESCRIPTION, LENGTH_TYPE, INTERNAL_ALLOWED, EXTERNAL_ALLOWED, RETRIEVAL_ALLOWED, AUTO_RETRIEVAL, SAW_TO_SWAPOUT, MIN_LENGTH, MAX_LENGTH, MIN_WEIGHT, MAX_WEIGHT, PRIORITY) VALUES
-(1, 1, 'KURZ', 'normale kurze Barren', 'S', TRUE, TRUE, TRUE, FALSE, FALSE, 3500, 4300, NULL, NULL, 0),
+(1, 1, 'KURZ', 'normale kurze Barren', 'S', TRUE, TRUE, TRUE, FALSE, FALSE, 3500, 4299, NULL, NULL, 0),
 (2, 1, 'LANG', 'normale lange Barren', 'L', TRUE, TRUE, FALSE, FALSE, FALSE, 7500, 8700, NULL, NULL, 0),
 (3, 1, 'MITTEL', 'mittellange Barren - Stapler zu externem Lager', 'M', FALSE, TRUE, TRUE, TRUE, TRUE, 4300, 7400, NULL, 18000, 0);
 
