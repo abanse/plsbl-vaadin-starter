@@ -29,6 +29,7 @@ node_modules/
 
 # Claude Code
 .claude/
+tmpclaude-*
 
 # Logs
 *.log
