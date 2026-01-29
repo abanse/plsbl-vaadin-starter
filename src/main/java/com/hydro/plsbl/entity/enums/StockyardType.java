@@ -8,6 +8,7 @@ public enum StockyardType {
     EXTERNAL('E', "Extern"),
     SAW('S', "Säge"),
     SWAPOUT('A', "Ausgang/Auslagerung"),  // Stapler-Abholplatz für externe Lagerung
+    SWAPIN('N', "Eingang/Rückführung"),   // Stapler-Anlieferplatz für Rückführung
     LOADING('L', "Verladung");
     
     private final char code;
@@ -30,7 +31,7 @@ public enum StockyardType {
      * Wird dieser Typ in der Lager-Ansicht angezeigt?
      */
     public boolean isShownInStockView() {
-        return this == INTERNAL || this == EXTERNAL || this == LOADING || this == SAW || this == SWAPOUT;
+        return this == INTERNAL || this == EXTERNAL || this == LOADING || this == SAW || this == SWAPOUT || this == SWAPIN;
     }
     
     public static StockyardType fromCode(char code) {

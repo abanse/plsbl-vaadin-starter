@@ -1,6 +1,38 @@
 =============================================================================
 ENTWICKLUNGSSTAND - PLSBL Vaadin Starter
-Stand: 27.01.2026 (Abend)
+Stand: 28.01.2026
+=============================================================================
+
+BUGFIX 28.01.2026: Externe Lagerplaetze aus Kran-Beladung ausgeschlossen
+-----------------------------------------------------------------------------
+
+PROBLEM:
+Barren auf externen Lagerplaetzen (YARD_TYPE='E') wurden faelschlicherweise
+fuer Kran-Beladung angeboten. Diese Plaetze sind nur per Stapler erreichbar!
+
+LOESUNG:
+1. IngotService.findAllInStock() - Filter hinzugefuegt
+   - SQL: AND s.YARD_TYPE != 'E'
+   - Methode gibt jetzt nur noch Kran-erreichbare Barren zurueck
+   - Kommentar aktualisiert zur Klarstellung
+
+2. IngotService.findAvailableForDelivery() - Filter hinzugefuegt
+   - Gleicher Filter wie findAllInStock()
+   - Dokumentation erweitert
+
+3. AutoRetrievalService.findExternalIngots() - Korrigiert
+   - Verwendet jetzt findByStockyardType('E') statt findAllInStock()
+   - Findet externe Barren weiterhin korrekt fuer Auto-Auslagerung
+
+AUSWIRKUNG:
+- Beladung zeigt nur noch Barren auf internen Plaetzen (Kran-erreichbar)
+- Externe Barren (16/xx, 17/xx) werden nicht mehr fuer Kran-Transport angeboten
+- Auto-Auslagerung funktioniert weiterhin (Stapler-Transport)
+
+Dateien:
+- src/main/java/com/hydro/plsbl/service/IngotService.java
+- src/main/java/com/hydro/plsbl/service/AutoRetrievalService.java
+
 =============================================================================
 
 AKTUELLES THEMA: Sicherheits-Alarmsystem mit Kran-Stopp

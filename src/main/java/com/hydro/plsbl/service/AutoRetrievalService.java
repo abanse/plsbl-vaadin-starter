@@ -152,28 +152,25 @@ public class AutoRetrievalService {
     /**
      * Findet Barren auf externen Lagerplaetzen fuer ein Produkt.
      * Sortiert nach FIFO (aelteste zuerst).
+     *
+     * Verwendet findByStockyardType('E') um direkt externe Barren zu laden,
+     * da findAllInStock() externe Plaetze ausfiltert (nur Kran-erreichbare).
      */
     private List<IngotDTO> findExternalIngots(Long productId) {
         try {
-            // Alle externen Plaetze finden
-            List<Long> externalYardIds = new ArrayList<>();
-            for (Stockyard yard : stockyardRepository.findByType(YARD_TYPE_EXTERNAL)) {
-                externalYardIds.add(yard.getId());
-            }
+            // Barren auf externen Plaetzen direkt laden (YARD_TYPE='E')
+            List<IngotDTO> externalIngots = ingotService.findByStockyardType(YARD_TYPE_EXTERNAL);
 
-            if (externalYardIds.isEmpty()) {
+            if (externalIngots.isEmpty()) {
+                log.info("Keine Barren auf externen Plaetzen gefunden");
                 return List.of();
             }
 
-            // Barren auf externen Plaetzen suchen
+            // Bei Produkt-Filter: nur passende Barren
             List<IngotDTO> result = new ArrayList<>();
-            for (IngotDTO ingot : ingotService.findAllInStock()) {
-                if (ingot.getStockyardId() != null &&
-                    externalYardIds.contains(ingot.getStockyardId())) {
-                    // Bei Produkt-Filter: nur passende Barren
-                    if (productId == null || productId.equals(ingot.getProductId())) {
-                        result.add(ingot);
-                    }
+            for (IngotDTO ingot : externalIngots) {
+                if (productId == null || productId.equals(ingot.getProductId())) {
+                    result.add(ingot);
                 }
             }
 
@@ -181,6 +178,7 @@ public class AutoRetrievalService {
             result.sort(Comparator.comparing(
                 i -> i.getInStockSince() != null ? i.getInStockSince() : java.time.LocalDateTime.MIN));
 
+            log.info("Gefunden: {} externe Barren fuer Produkt-ID {}", result.size(), productId);
             return result;
 
         } catch (Exception e) {
@@ -250,6 +248,7 @@ public class AutoRetrievalService {
             TransportOrderDTO order = new TransportOrderDTO();
             order.setTransportNo(generateStaplerTransportNo());
             order.setNormText("AUTO-AUSLAGERUNG fuer Abruf " + calloff.getCalloffNumber());
+            order.setCalloffId(calloff.getId());
             order.setIngotId(barren.getId());
             order.setFromYardId(barren.getStockyardId());
             order.setFromPilePosition(barren.getPilePosition());
@@ -281,16 +280,18 @@ public class AutoRetrievalService {
     /**
      * Generiert eine Transportnummer fuer Stapler-Auftraege.
      * Format: STYY-NNNN (z.B. ST26-0001)
+     * Synchronized um Race Conditions bei parallelen Aufrufen zu vermeiden.
      */
-    private String generateStaplerTransportNo() {
+    private synchronized String generateStaplerTransportNo() {
         int year = LocalDate.now().getYear() % 100;
         String prefix = "ST" + String.format("%02d", year) + "-";
         try {
             Integer maxNo = jdbcTemplate.queryForObject(
-                "SELECT NVL(MAX(TO_NUMBER(SUBSTR(TRANSPORT_NO, 6))), 0) + 1 FROM TD_TRANSPORTORDER WHERE TRANSPORT_NO LIKE ?",
+                "SELECT COALESCE(MAX(CAST(SUBSTRING(TRANSPORT_NO, 6) AS INTEGER)), 0) + 1 FROM TD_TRANSPORTORDER WHERE TRANSPORT_NO LIKE ?",
                 Integer.class, prefix + "%");
             return prefix + String.format("%04d", maxNo != null ? maxNo : 1);
         } catch (Exception e) {
+            log.error("Fehler bei Transportnummer-Generierung: {}", e.getMessage());
             return prefix + String.format("%04d", (System.currentTimeMillis() % 10000));
         }
     }
@@ -330,13 +331,12 @@ public class AutoRetrievalService {
      */
     private boolean hasOpenStaplerAnforderung(Long calloffId) {
         try {
-            // Pruefen ob Transport-Auftraege mit "AUTO-AUSLAGERUNG" im Normtext existieren
-            // die noch nicht abgeschlossen sind
             Integer count = jdbcTemplate.queryForObject(
                 "SELECT COUNT(*) FROM TD_TRANSPORTORDER " +
-                "WHERE NORMTEXT LIKE '%AUTO-AUSLAGERUNG%' " +
+                "WHERE CALLOFF_ID = ? " +
+                "AND NORMTEXT LIKE '%AUTO-AUSLAGERUNG%' " +
                 "AND STATUS IN ('P', 'I', 'U', 'H')",
-                Integer.class);
+                Integer.class, calloffId);
             return count != null && count > 0;
         } catch (Exception e) {
             return false;
